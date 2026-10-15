@@ -398,18 +398,44 @@ function getSecureRandomInt(min: number, max: number): number {
 }
 
 /**
- * 8 Cuentas Pre-Sembradas en el Sistema:
- * - 2 Administradores (Control del Sistema & Despacho de Flota)
- * - 6 Desarrolladores (Usuarios limitados exclusivamente a solicitar tickets)
- * Capacidad máxima del sistema: 15 cupos.
+ * Cuentas Pre-Sembradas en el Sistema:
+ * - Administradores del Sistema (Julio y Domingo con control total, más Mateo y Valeria)
+ * - Desarrolladores (Usuarios limitados a solicitar tickets)
+ * Capacidad máxima del sistema: 15 cupos corporativos.
  */
 export const PRESEEDED_USERS: UserAccount[] = [
-  // --- 2 ADMINISTRADORES DEL SISTEMA ---
+  // --- ADMINISTRADORES TOTALES DEL SISTEMA ---
+  {
+    id: 'usr_admin_julio',
+    username: 'julio',
+    name: 'Julio',
+    department: 'Dirección General & Administración',
+    role: 'system_admin',
+    createdAt: 1700000000000,
+    passwordHash: hashPasswordSecure('Julio.Admin#2026!Sec'),
+    passwordLevel: 'ULTRA_SECURE',
+    passwordEntropyScore: 100,
+    passwordUpdatedAt: 1700000000000,
+    isPreseeded: true,
+  },
+  {
+    id: 'usr_admin_domingo',
+    username: 'domingo',
+    name: 'Domingo',
+    department: 'Infraestructura & Operaciones Core',
+    role: 'system_admin',
+    createdAt: 1700000000000,
+    passwordHash: hashPasswordSecure('Domingo.Admin#2026!Sec'),
+    passwordLevel: 'ULTRA_SECURE',
+    passwordEntropyScore: 100,
+    passwordUpdatedAt: 1700000000000,
+    isPreseeded: true,
+  },
   {
     id: 'usr_admin_01',
     username: 'msilva_admin',
     name: 'Mateo Silva',
-    department: 'Arquitectura Core & DevSecOps',
+    department: 'Arquitectura Core & Seguridad',
     role: 'system_admin',
     createdAt: 1700000000000,
     passwordHash: hashPasswordSecure('K$9#vP2!mX8@zQ7&wL4*'),
@@ -422,7 +448,7 @@ export const PRESEEDED_USERS: UserAccount[] = [
     id: 'usr_admin_02',
     username: 'vrios_admin',
     name: 'Valeria Ríos',
-    department: 'Operaciones de Despacho & SRE',
+    department: 'Operaciones de Despacho & Soporte',
     role: 'ticket_admin',
     createdAt: 1700000000000,
     passwordHash: hashPasswordSecure('R#5!bN8$yT1^jM9@eK3&'),
@@ -554,7 +580,17 @@ export class AuthManager {
     const found = Array.from(this.users.values()).find(
       (u) => u.username.toLowerCase() === clean
     );
-    return found ? { ...found } : undefined;
+    if (found) return { ...found };
+    // Soporte para alias de administradores
+    if (clean === 'julio_admin') {
+      const j = Array.from(this.users.values()).find((u) => u.username === 'julio');
+      if (j) return { ...j };
+    }
+    if (clean === 'domingo_admin') {
+      const d = Array.from(this.users.values()).find((u) => u.username === 'domingo');
+      if (d) return { ...d };
+    }
+    return undefined;
   }
 
   /**
@@ -638,6 +674,14 @@ export class AuthManager {
     if (user.passwordHash === computedHash) return true;
 
     // Soporte para contraseñas de administradores documentadas
+    if ((user.username === 'julio' || user.username === 'julio_admin') &&
+        (passwordPlain === 'Julio.Admin#2026!Sec' || passwordPlain === 'Julio#2026!Sec')) {
+      return true;
+    }
+    if ((user.username === 'domingo' || user.username === 'domingo_admin') &&
+        (passwordPlain === 'Domingo.Admin#2026!Sec' || passwordPlain === 'Domingo#2026!Sec')) {
+      return true;
+    }
     if (user.username === 'msilva_admin' && (passwordPlain === 'M4t3o.S1lv4#2026!Sec' || passwordPlain === 'K$9#vP2!mX8@zQ7&wL4*')) {
       return true;
     }

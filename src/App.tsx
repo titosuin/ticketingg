@@ -11,6 +11,7 @@ import type {
   EnqueueTicketInput,
   RequeueStrategy,
   UserAccount,
+  AdminNotification,
 } from './engine/types.ts';
 import { defaultAuthManager, AuthManager } from './engine/security.ts';
 import { appDatabase } from './engine/database.ts';
@@ -23,6 +24,7 @@ import { EnqueueModal } from './components/EnqueueModal.tsx';
 import { TicketDetailModal } from './components/TicketDetailModal.tsx';
 import { UserManagementModal } from './components/UserManagementModal.tsx';
 import { AppTour } from './components/AppTour.tsx';
+import { TeamChatModal } from './components/TeamChatModal.tsx';
 import { Inbox, Clock, CheckCircle2, AlertOctagon } from 'lucide-react';
 
 const INITIAL_WORKERS: WorkerStatus[] = [
@@ -46,10 +48,14 @@ export default function App() {
   const [allTickets, setAllTickets] = useState<Ticket[]>([]);
   const [workers, setWorkers] = useState<WorkerStatus[]>(INITIAL_WORKERS);
 
-  // Modales y Tour Guiado
+  // Modales, Chat y Tour Guiado
   const [isEnqueueOpen, setIsEnqueueOpen] = useState(false);
   const [inspectTicket, setInspectTicket] = useState<Ticket | null>(null);
   const [isTourOpen, setIsTourOpen] = useState(() => !localStorage.getItem('aegisflow_tour_completed'));
+  const [isTeamChatOpen, setIsTeamChatOpen] = useState(false);
+  const [adminNotifs, setAdminNotifs] = useState<AdminNotification[]>(() =>
+    currentUser ? appDatabase.getAdminNotifications(currentUser.username) : []
+  );
 
   // Sincronización del estado del motor y persistencia
   const refreshEngineState = useCallback(() => {
@@ -61,28 +67,44 @@ export default function App() {
     appDatabase.saveTicketsBatch(tickets);
   }, []);
 
-  // Cargar tickets guardados en base de datos al inicio
+  // Cargar histórico de tickets guardados al inicio
   useEffect(() => {
-    const init = async () => {
+    const init = () => {
       const savedTickets = appDatabase.getAllTickets();
       if (savedTickets.length > 0) {
-        for (const t of savedTickets) {
-          await engineRef.current.enqueue({
-            title: t.payload.title,
-            description: t.payload.description,
-            tags: t.payload.tags,
-            severity: t.severity,
-            author: t.author,
-            slaMinutes: Math.max(1, Math.round((t.slaDeadlineMs - t.timestamps.createdAt) / 60000)),
-            maxRetries: t.dispatchTelemetry.maxRetries,
-            context: t.payload.context,
-          });
-        }
+        engineRef.current.import_tickets(savedTickets);
       }
       refreshEngineState();
     };
     init();
   }, [refreshEngineState]);
+
+  // Actualizar notificaciones al cambiar de usuario
+  useEffect(() => {
+    if (currentUser) {
+      setAdminNotifs(appDatabase.getAdminNotifications(currentUser.username));
+    } else {
+      setAdminNotifs([]);
+    }
+  }, [currentUser]);
+
+  // Handlers para Notificaciones
+  const handleMarkNotifRead = (id: string) => {
+    appDatabase.markNotificationAsRead(id);
+    if (currentUser) setAdminNotifs(appDatabase.getAdminNotifications(currentUser.username));
+  };
+
+  const handleMarkAllNotifsRead = () => {
+    if (currentUser) {
+      appDatabase.markAllNotificationsAsRead(currentUser.username);
+      setAdminNotifs(appDatabase.getAdminNotifications(currentUser.username));
+    }
+  };
+
+  const handleSelectTicketFromNotif = (ticketId: string) => {
+    const t = allTickets.find((tk) => tk.id === ticketId) || appDatabase.getTicketById(ticketId);
+    if (t) setInspectTicket(t);
+  };
 
   // Bucle de temporización para agentes y leases
   useEffect(() => {
@@ -276,10 +298,15 @@ export default function App() {
         onOpenEnqueue={() => setIsEnqueueOpen(true)}
         onOpenUserModal={() => setIsUserModalOpen(true)}
         onOpenTour={() => setIsTourOpen(true)}
+        onOpenChat={() => setIsTeamChatOpen(true)}
         onLogout={handleLogout}
         dlqCount={metrics.deadLetterCount}
         activeView={activeView}
         setActiveView={setActiveView}
+        notifications={adminNotifs}
+        onMarkNotificationRead={handleMarkNotifRead}
+        onMarkAllNotificationsRead={handleMarkAllNotifsRead}
+        onSelectTicketFromNotification={handleSelectTicketFromNotif}
       />
 
       {/* Contenido Principal */}
@@ -446,6 +473,14 @@ export default function App() {
       <TicketDetailModal
         ticket={inspectTicket}
         onClose={() => setInspectTicket(null)}
+        currentUser={currentUser}
+        onTicketUpdated={() => refreshEngineState()}
+      />
+
+      <TeamChatModal
+        isOpen={isTeamChatOpen}
+        onClose={() => setIsTeamChatOpen(false)}
+        currentUser={currentUser}
       />
 
       <UserManagementModal

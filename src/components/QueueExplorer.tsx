@@ -16,6 +16,7 @@ import {
   AlertCircle,
   Inbox,
   User,
+  MessageSquare,
 } from 'lucide-react';
 
 export type StateCategoryFilter = 'ALL' | 'QUEUED' | 'PROCESSING' | 'COMPLETED' | 'DEAD_LETTER';
@@ -269,6 +270,13 @@ export const QueueExplorer: React.FC<QueueExplorerProps> = ({
                       #{tag}
                     </span>
                   ))}
+
+                  {t.comments && t.comments.length > 0 && (
+                    <span className="inline-flex items-center gap-1 text-[11px] text-zinc-400 font-mono">
+                      <MessageSquare className="w-3 h-3 text-zinc-400" />
+                      <span>{t.comments.length}</span>
+                    </span>
+                  )}
                 </div>
               </div>
 

@@ -628,16 +628,18 @@ test('DevSecOps: Sanitización forense de secretos JWT y Postgres al caer en DEA
   assert.ok(dlqAudit.reason.includes('[REDACTED_REDIS_URI]'));
 });
 
-test('DevSecOps: 8 usuarios pre-sembrados (2 admins + 6 desarrolladores) y límite de cupos estricto de 15 personas', () => {
+test('DevSecOps: 10 usuarios pre-sembrados (4 admins incl. Julio y Domingo + 6 desarrolladores) y límite de cupos estricto de 15 personas', () => {
   const auth = new AuthManager();
 
-  // 1. Verificar existencia de exactamente 8 personas iniciales
+  // 1. Verificar existencia de exactamente 10 personas iniciales
   const users = auth.getUsers();
-  assert.equal(users.length, 8, 'Debe haber exactamente 8 personas pre-sembradas');
+  assert.equal(users.length, 10, 'Debe haber exactamente 10 personas pre-sembradas');
 
-  // 2. Verificar los 2 administradores
+  // 2. Verificar los 4 administradores (Julio y Domingo como administradores totales, Mateo y Valeria)
   const admins = users.filter((u) => u.role === 'system_admin' || u.role === 'ticket_admin');
-  assert.equal(admins.length, 2, 'Debe haber exactamente 2 administradores');
+  assert.equal(admins.length, 4, 'Debe haber exactamente 4 administradores');
+  assert.ok(users.some((u) => u.username === 'julio' && u.role === 'system_admin'), 'Julio debe ser system_admin');
+  assert.ok(users.some((u) => u.username === 'domingo' && u.role === 'system_admin'), 'Domingo debe ser system_admin');
   assert.ok(users.some((u) => u.username === 'msilva_admin' && u.role === 'system_admin'));
   assert.ok(users.some((u) => u.username === 'vrios_admin' && u.role === 'ticket_admin'));
 
@@ -649,15 +651,15 @@ test('DevSecOps: 8 usuarios pre-sembrados (2 admins + 6 desarrolladores) y lími
     assert.ok(developers.some((d) => d.username === u), `Desarrollador @${u} debe existir`);
   }
 
-  // 4. Verificar métricas de cupos iniciales: 8 / 15 cupos ocupados, 7 disponibles
+  // 4. Verificar métricas de cupos iniciales: 10 / 15 cupos ocupados, 5 disponibles
   const quota = auth.getQuota();
-  assert.equal(quota.total, 8);
+  assert.equal(quota.total, 10);
   assert.equal(quota.max, MAX_SYSTEM_USERS_QUOTA);
-  assert.equal(quota.available, 7);
-  assert.equal(quota.percent, Math.round((8 / 15) * 100));
+  assert.equal(quota.available, 5);
+  assert.equal(quota.percent, Math.round((10 / 15) * 100));
 
-  // 5. Registrar 7 usuarios adicionales válidos para alcanzar exactamente 15 cupos
-  for (let i = 1; i <= 7; i++) {
+  // 5. Registrar 5 usuarios adicionales válidos para alcanzar exactamente 15 cupos
+  for (let i = 1; i <= 5; i++) {
     const registered = auth.registerUser({
       username: `newdev_0${i}`,
       name: `Desarrollador Adicional ${i}`,

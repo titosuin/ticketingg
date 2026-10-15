@@ -49,7 +49,7 @@ export const AppTour: React.FC<AppTourProps> = ({
       badge: 'Paso 1 de 5 • Introducción',
       description:
         `Hola ${userName}. AegisFlow es el motor empresarial de flujo, despacho y resolución de tickets de alta concurrencia con seguridad DevSecOps integrada.`,
-      icon: <Sparkles className="w-8 h-8 text-indigo-400" />,
+      icon: <LifeBuoy className="w-8 h-8 text-indigo-400" />,
       tips: [
         'Despacho en tiempo real sin colisiones ni condiciones de carrera.',
         'Prevención de inanición (Aging Priority) para que ningún ticket quede rezagado.',

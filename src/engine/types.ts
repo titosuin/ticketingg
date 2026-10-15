@@ -107,6 +107,40 @@ export interface DispatchTelemetry {
   auditTrail: AuditTransition[];
 }
 
+export interface TicketComment {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorRole: UserRole;
+  content: string;
+  timestamp: number;
+}
+
+export type NotificationType = 'CRITICAL_TICKET' | 'DLQ_ALERT' | 'CHAT_MENTION' | 'RESOLUTION' | 'SECURITY';
+
+export interface AdminNotification {
+  id: string;
+  recipientUsername: string; // 'julio' | 'domingo' | 'all_admins'
+  type: NotificationType;
+  title: string;
+  message: string;
+  timestamp: number;
+  read: boolean;
+  ticketId?: string;
+  channelId?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  senderId: string;
+  senderName: string;
+  senderRole: UserRole;
+  channelId?: string; // e.g. 'general' | 'incidentes' | 'infraestructura'
+  recipientId?: string; // Para mensajes directos
+  content: string;
+  timestamp: number;
+}
+
 export interface Ticket {
   readonly id: string; // Canonical UUIDv7
   state: TicketState;
@@ -121,6 +155,7 @@ export interface Ticket {
   closingMetadata?: Record<string, unknown>;
   failureReason?: string;
   lastDynamicScore?: number;
+  comments?: TicketComment[];
 }
 
 export interface QueueMetrics {

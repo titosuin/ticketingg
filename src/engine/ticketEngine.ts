@@ -667,6 +667,38 @@ export class TicketEngine {
     return Array.from(this.allTickets.values()).map((t) => ({ ...t }));
   }
 
+  /**
+   * Imports or restores a batch of historical tickets into the engine
+   * respecting their individual lifecycle states, audit trails, and metrics.
+   */
+  public import_tickets(tickets: Ticket[]): void {
+    const now = Date.now();
+    for (const t of tickets) {
+      if (this.allTickets.has(t.id)) continue;
+      this.allTickets.set(t.id, { ...t });
+      this.totalCreatedCounter++;
+      switch (t.state) {
+        case 'QUEUED':
+        case 'REQUEUED':
+          this.queue.enqueue(t, now);
+          break;
+        case 'PROCESSING':
+          this.processingTickets.set(t.id, t);
+          break;
+        case 'COMPLETED':
+          this.completedTickets.set(t.id, t);
+          this.totalCompletedCount++;
+          if (t.timestamps.resolvedAt) {
+            this.totalCompletedDwellSumMs += (t.timestamps.resolvedAt - t.timestamps.createdAt);
+          }
+          break;
+        case 'DEAD_LETTER':
+          this.deadLetterTickets.set(t.id, t);
+          break;
+      }
+    }
+  }
+
   public get_dlq_tickets(): Ticket[] {
     return Array.from(this.deadLetterTickets.values()).map((t) => ({ ...t }));
   }
