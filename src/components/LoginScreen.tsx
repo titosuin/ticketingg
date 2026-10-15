@@ -4,22 +4,17 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import type { UserAccount, UserRole, RegisterUserInput } from '../engine/types.ts';
+import type { UserAccount, RegisterUserInput } from '../engine/types.ts';
 import {
   AuthManager,
-  SecurityViolationError,
-  ADMIN_MASTER_CODE,
-  ADMIN_INVITE_TOKEN_SECRET,
   MAX_SYSTEM_USERS_QUOTA,
   generateUltraSecurePassword,
-  getRoleLabelEs,
 } from '../engine/security.ts';
 import { appDatabase } from '../engine/database.ts';
 import {
   ShieldCheck,
   Lock,
   User,
-  KeyRound,
   Eye,
   EyeOff,
   UserPlus,
@@ -28,8 +23,6 @@ import {
   CheckCircle2,
   AlertCircle,
   Clock,
-  Briefcase,
-  Key,
 } from 'lucide-react';
 
 interface LoginScreenProps {
@@ -55,9 +48,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [regDepartment, setRegDepartment] = useState('Ingeniería de Software');
   const [regPassword, setRegPassword] = useState('');
   const [showRegPassword, setShowRegPassword] = useState(false);
-  const [hasAuthCode, setHasAuthCode] = useState(false);
-  const [regRole, setRegRole] = useState<'ticket_admin' | 'system_admin'>('ticket_admin');
-  const [regAdminCode, setRegAdminCode] = useState('');
 
   // Mensajes y Bloqueo
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -170,33 +160,23 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     }
 
     try {
-      const assignedRole: UserRole = hasAuthCode ? regRole : 'requester';
-      const authCode = hasAuthCode ? regAdminCode.trim() : undefined;
-
       const input: RegisterUserInput = {
         name: regName.trim(),
         username: regUsername.trim(),
         department: regDepartment.trim() || 'Desarrollo de Software',
-        requestedRole: assignedRole,
+        requestedRole: 'requester',
         passwordPlain: regPassword.trim(),
-        adminInviteToken: authCode,
       };
 
       const created = authManager.registerUser(input, null);
       appDatabase.saveUser(created);
 
-      setSuccessMessage(`¡Cuenta creada exitosamente como ${getRoleLabelEs(created.role)}! Ya puedes iniciar sesión.`);
+      setSuccessMessage('¡Cuenta creada exitosamente! Ya puedes iniciar sesión.');
       setUsername(created.username);
       setPassword(regPassword.trim());
       setTab('login');
     } catch (err: unknown) {
-      if (err instanceof SecurityViolationError) {
-        if (err.code === 'PRIVILEGE_ESCALATION_BLOCKED') {
-          setErrorMessage('Código de autorización inválido. Para registrar personal de soporte o administrador introduce el código maestro ADMIN-2026.');
-        } else {
-          setErrorMessage(err.message);
-        }
-      } else if (err instanceof Error) {
+      if (err instanceof Error) {
         setErrorMessage(err.message);
       } else {
         setErrorMessage('Ocurrió un error al registrar la cuenta.');
@@ -426,56 +406,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   {showRegPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
                 </button>
               </div>
-            </div>
-
-            {/* CASILLA OPCIONAL: CÓDIGO DE AUTORIZACIÓN DE PERSONAL */}
-            <div className="pt-2 border-t border-slate-800/80">
-              <label className="flex items-center gap-2 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={hasAuthCode}
-                  onChange={(e) => setHasAuthCode(e.target.checked)}
-                  className="w-4 h-4 rounded bg-slate-950 border-slate-700 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-slate-900"
-                />
-                <span className="text-xs text-slate-300 font-medium">
-                  ¿Tienes un código de autorización de personal?
-                </span>
-              </label>
-
-              {hasAuthCode && (
-                <div className="mt-3 p-3 bg-slate-950/90 border border-indigo-500/30 rounded-xl space-y-3">
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      Rol de Personal
-                    </label>
-                    <select
-                      value={regRole}
-                      onChange={(e) => setRegRole(e.target.value as 'ticket_admin' | 'system_admin')}
-                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
-                    >
-                      <option value="ticket_admin">Agente de Soporte</option>
-                      <option value="system_admin">Administrador</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-medium text-slate-300 mb-1">
-                      Código Secreto (ADMIN-2026)
-                    </label>
-                    <div className="relative">
-                      <Key className="w-3.5 h-3.5 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="password"
-                        value={regAdminCode}
-                        onChange={(e) => setRegAdminCode(e.target.value)}
-                        placeholder="ADMIN-2026"
-                        required={hasAuthCode}
-                        className="w-full bg-slate-900 border border-slate-700 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
-                      />
-                    </div>
-                  </div>
-                </div>
-              )}
             </div>
 
             {/* Cupo del Sistema */}
