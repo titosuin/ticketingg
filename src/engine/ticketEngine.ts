@@ -11,10 +11,16 @@ import type {
   RequeueStrategy,
   QueueMetrics,
   AuditTransition,
+  UserAccount,
 } from './types.ts';
 import { generateUUIDv7 } from './uuidv7.ts';
 import { AsyncMutex } from './concurrency.ts';
 import { IndexedPriorityQueue } from './priorityQueue.ts';
+import {
+  sanitizeForensicString,
+  sanitizeForensicMetadata,
+  enforceRowLevelSecurity,
+} from './security.ts';
 
 export interface EngineConfig {
   defaultLeaseTtlMs?: number;
@@ -33,6 +39,9 @@ export class TicketEngine {
 
   private mutex: AsyncMutex = new AsyncMutex();
   private config: Required<EngineConfig>;
+
+  // Monotonic fencing token sequence preventing Split-Brain anomalies
+  private fencingTokenSequence = 0;
 
   // Running telemetry accumulators for O(1) metrics
   private totalCreatedCounter = 0;
@@ -95,6 +104,10 @@ export class TicketEngine {
         },
       };
 
+      const sanitizedContext = input.context
+        ? (sanitizeForensicMetadata(input.context) as Record<string, unknown>)
+        : undefined;
+
       const ticket: Ticket = {
         id: ticketId,
         state: 'QUEUED',
@@ -103,7 +116,7 @@ export class TicketEngine {
           title: input.title,
           description: input.description,
           tags: input.tags,
-          context: input.context,
+          context: sanitizedContext,
         },
         severity,
         basePriorityScore,
@@ -122,6 +135,7 @@ export class TicketEngine {
           maxRetries,
           currentWorkerId: null,
           leaseTtlMs: this.config.defaultLeaseTtlMs,
+          fencingToken: 0,
           auditTrail: [initialAudit],
         },
       };
@@ -150,9 +164,29 @@ export class TicketEngine {
   }
 
   /**
-   * Atomic Lease Acquisition Protocol.
+   * Atomic Lease Acquisition Protocol with Monotonic Fencing Token.
    * Extracts the highest priority eligible ticket and issues a time-bound lease to worker_id.
-   * Guarantees race-condition freedom across concurrent worker threads.
+   * Increments the fencing token sequence to prevent Split-Brain phenomena under network partitions.
+   *
+   * PostgreSQL Equivalent Query Pattern:
+   * ```sql
+   * WITH next_ticket AS (
+   *   SELECT id FROM tickets
+   *   WHERE state = 'QUEUED' AND (backoff_until IS NULL OR backoff_until <= NOW())
+   *   ORDER BY dynamic_priority DESC, created_at ASC
+   *   LIMIT 1
+   *   FOR UPDATE SKIP LOCKED
+   * )
+   * UPDATE tickets
+   * SET state = 'PROCESSING',
+   *     worker_id = $1,
+   *     fencing_token = nextval('ticket_fencing_token_seq'),
+   *     lease_expires_at = NOW() + INTERVAL '5 seconds',
+   *     assigned_at = NOW()
+   * FROM next_ticket
+   * WHERE tickets.id = next_ticket.id
+   * RETURNING tickets.*;
+   * ```
    * Time Complexity: O(log N)
    */
   public async acquire_next(
@@ -179,10 +213,15 @@ export class TicketEngine {
         );
       }
 
+      // Monotonic fencing token incrementation (Split-brain prevention)
+      this.fencingTokenSequence++;
+      const currentFencingToken = this.fencingTokenSequence;
+
       // 4. Atomic Lease Assignment
       ticket.state = 'PROCESSING';
       ticket.dispatchTelemetry.currentWorkerId = worker_id;
       ticket.dispatchTelemetry.leaseTtlMs = effectiveTtl;
+      ticket.dispatchTelemetry.fencingToken = currentFencingToken;
       ticket.timestamps.assignedAt = now;
       ticket.timestamps.leaseExpiresAt = now + effectiveTtl;
 
@@ -193,11 +232,13 @@ export class TicketEngine {
         toState: 'PROCESSING',
         timestamp: now,
         actor: worker_id,
-        reason: `Atomic lease acquired with TTL of ${effectiveTtl}ms`,
+        reason: `Atomic lease acquired with TTL of ${effectiveTtl}ms (Fencing Token #${currentFencingToken})`,
+        fencingToken: currentFencingToken,
         metadata: {
           workerId: worker_id,
           leaseExpiresAt: ticket.timestamps.leaseExpiresAt,
           leaseTtlMs: effectiveTtl,
+          fencingToken: currentFencingToken,
         },
       });
 
@@ -216,7 +257,8 @@ export class TicketEngine {
     worker_id: string,
     resolution_notes: string,
     closing_metadata?: Record<string, unknown>,
-    now: number = Date.now()
+    now: number = Date.now(),
+    expected_fencing_token?: number
   ): Promise<Ticket> {
     return this.mutex.withLock(() => {
       const ticket = this.processingTickets.get(ticket_id);
@@ -228,6 +270,16 @@ export class TicketEngine {
         }
         throw new Error(
           `Cannot commit resolution: Ticket ${ticket_id} is in state '${existing.state}', not 'PROCESSING'.`
+        );
+      }
+
+      // Verify Fencing Token FIRST (Prevent Split-Brain Commit under network partition/lease re-assignment)
+      if (
+        expected_fencing_token !== undefined &&
+        expected_fencing_token !== ticket.dispatchTelemetry.fencingToken
+      ) {
+        throw new Error(
+          `Fencing Token Violation (Split-Brain Blocked): Stale commit attempt with fencing token #${expected_fencing_token}. Current active ticket fencing token is #${ticket.dispatchTelemetry.fencingToken}.`
         );
       }
 
@@ -266,10 +318,12 @@ export class TicketEngine {
         timestamp: now,
         actor: worker_id,
         reason: 'Ticket successfully resolved and committed',
+        fencingToken: ticket.dispatchTelemetry.fencingToken,
         metadata: {
           resolutionNotes: resolution_notes,
           closingMetadata: closing_metadata,
           lifecycleDwellMs: totalLifecycleDwell,
+          fencingToken: ticket.dispatchTelemetry.fencingToken,
         },
       });
 
@@ -293,9 +347,29 @@ export class TicketEngine {
     ticket_id: string,
     reason: string,
     strategy: RequeueStrategy = 'EXPONENTIAL_BACKOFF',
-    now: number = Date.now()
+    nowOrWorkerId: number | string = Date.now(),
+    workerIdOrFencingToken?: string | number,
+    expected_fencing_token?: number
   ): Promise<Ticket> {
     return this.mutex.withLock(() => {
+      let now: number = Date.now();
+      let worker_id: string | undefined = undefined;
+      let token: number | undefined = expected_fencing_token;
+
+      if (typeof nowOrWorkerId === 'number') {
+        now = nowOrWorkerId;
+        if (typeof workerIdOrFencingToken === 'string') {
+          worker_id = workerIdOrFencingToken;
+        } else if (typeof workerIdOrFencingToken === 'number') {
+          token = workerIdOrFencingToken;
+        }
+      } else if (typeof nowOrWorkerId === 'string') {
+        worker_id = nowOrWorkerId;
+        if (typeof workerIdOrFencingToken === 'number') {
+          token = workerIdOrFencingToken;
+        }
+      }
+
       const ticket = this.processingTickets.get(ticket_id);
       if (!ticket) {
         const existing = this.allTickets.get(ticket_id);
@@ -307,8 +381,21 @@ export class TicketEngine {
         );
       }
 
+      // Verify Fencing Token (Prevent Split-Brain Requeue)
+      if (
+        token !== undefined &&
+        token !== ticket.dispatchTelemetry.fencingToken
+      ) {
+        throw new Error(
+          `Fencing Token Violation (Split-Brain Blocked): Stale requeue attempt with fencing token #${token}. Current active ticket fencing token is #${ticket.dispatchTelemetry.fencingToken}.`
+        );
+      }
+
       this.processingTickets.delete(ticket_id);
       this.requeuedEventCount++;
+
+      // Sanitize failure reason
+      const sanitizedReason = sanitizeForensicString(reason);
 
       // Increment retry counter
       ticket.dispatchTelemetry.retryCount++;
@@ -317,19 +404,22 @@ export class TicketEngine {
 
       // Step 1: Transition to REQUEUED state
       ticket.state = 'REQUEUED';
-      ticket.failureReason = reason;
+      ticket.failureReason = sanitizedReason;
 
       ticket.dispatchTelemetry.auditTrail.push({
         transitionId: generateUUIDv7(now),
         fromState: 'PROCESSING',
         toState: 'REQUEUED',
         timestamp: now,
-        actor: ticket.dispatchTelemetry.currentWorkerId ?? 'SYSTEM',
-        reason,
+        actor: worker_id ?? ticket.dispatchTelemetry.currentWorkerId ?? 'SYSTEM',
+        reason: sanitizedReason,
+        fencingToken: ticket.dispatchTelemetry.fencingToken,
         metadata: {
           retryCount: currentRetries,
           maxRetries,
           strategy,
+          sanitizedReason,
+          fencingToken: ticket.dispatchTelemetry.fencingToken,
         },
       });
 
@@ -347,10 +437,12 @@ export class TicketEngine {
           toState: 'DEAD_LETTER',
           timestamp: now,
           actor: 'SYSTEM_DLQ_ROUTER',
-          reason: `Exceeded maximum retry limit (${currentRetries}/${maxRetries}). Isolated for forensic audit.`,
+          reason: `Exceeded maximum retry limit (${currentRetries}/${maxRetries}). Isolated for forensic audit. Reason: ${sanitizedReason}`,
+          fencingToken: ticket.dispatchTelemetry.fencingToken,
           metadata: {
-            fatalReason: reason,
+            fatalReason: sanitizedReason,
             totalRetries: currentRetries,
+            fencingToken: ticket.dispatchTelemetry.fencingToken,
           },
         });
 
@@ -382,10 +474,12 @@ export class TicketEngine {
         timestamp: now,
         actor: 'SYSTEM_DISPATCH',
         reason: `Re-enqueued with strategy: ${strategy}`,
+        fencingToken: ticket.dispatchTelemetry.fencingToken,
         metadata: {
           strategy,
           backoffUntil: ticket.timestamps.backoffUntil,
           newBasePriority: ticket.basePriorityScore,
+          fencingToken: ticket.dispatchTelemetry.fencingToken,
         },
       });
 
@@ -401,12 +495,23 @@ export class TicketEngine {
     ticket_id: string,
     worker_id: string,
     extension_ms?: number,
-    now: number = Date.now()
+    now: number = Date.now(),
+    expected_fencing_token?: number
   ): Promise<Ticket> {
     return this.mutex.withLock(() => {
       const ticket = this.processingTickets.get(ticket_id);
       if (!ticket) {
         throw new Error(`Ticket ${ticket_id} is not currently in PROCESSING.`);
+      }
+
+      // Verify Fencing Token (Prevent Split-Brain Heartbeat)
+      if (
+        expected_fencing_token !== undefined &&
+        expected_fencing_token !== ticket.dispatchTelemetry.fencingToken
+      ) {
+        throw new Error(
+          `Fencing Token Violation (Split-Brain Blocked): Stale heartbeat attempt with fencing token #${expected_fencing_token}. Current active ticket fencing token is #${ticket.dispatchTelemetry.fencingToken}.`
+        );
       }
 
       if (ticket.dispatchTelemetry.currentWorkerId !== worker_id) {
@@ -423,7 +528,11 @@ export class TicketEngine {
         timestamp: now,
         actor: worker_id,
         reason: `Lease extended by ${ext}ms (Heartbeat)`,
-        metadata: { newExpiresAt: ticket.timestamps.leaseExpiresAt },
+        fencingToken: ticket.dispatchTelemetry.fencingToken,
+        metadata: {
+          newExpiresAt: ticket.timestamps.leaseExpiresAt,
+          fencingToken: ticket.dispatchTelemetry.fencingToken,
+        },
       });
 
       return { ...ticket };
@@ -495,6 +604,7 @@ export class TicketEngine {
       remainingMs: Math.max(0, (t.timestamps.leaseExpiresAt ?? now) - now),
       expiresAt: t.timestamps.leaseExpiresAt ?? now,
       severity: t.severity,
+      fencingToken: t.dispatchTelemetry.fencingToken,
     }));
 
     // Count tickets nearing or breached SLA
@@ -525,6 +635,31 @@ export class TicketEngine {
   public get_ticket(id: string): Ticket | null {
     const t = this.allTickets.get(id);
     return t ? { ...t } : null;
+  }
+
+  /**
+   * Retrieves a ticket enforcing Row-Level Security (RLS).
+   * Prevents Broken Object Level Authorization (BOLA/IDOR).
+   */
+  public get_ticket_secure(id: string, user: UserAccount): Ticket | null {
+    const ticket = this.get_ticket(id);
+    if (!ticket) return null;
+    return enforceRowLevelSecurity(ticket, user);
+  }
+
+  /**
+   * Retrieves all tickets visible to a specific user under Row-Level Security.
+   * If requester, only tickets authored by user are returned (with masked internal context).
+   * If admin or sysadmin, all tickets are returned.
+   */
+  public get_tickets_for_user(user: UserAccount): Ticket[] {
+    const all = this.get_all_tickets();
+    if (user.role === 'requester') {
+      return all
+        .filter((t) => t.author.id === user.id)
+        .map((t) => enforceRowLevelSecurity(t, user));
+    }
+    return all.map((t) => enforceRowLevelSecurity(t, user));
   }
 
   public get_all_tickets(): Ticket[] {
@@ -589,6 +724,8 @@ export class TicketEngine {
     const workerId = ticket.dispatchTelemetry.currentWorkerId;
     this.processingTickets.delete(ticket.id);
 
+    const sanitizedReason = sanitizeForensicString(reason);
+    ticket.failureReason = sanitizedReason;
     ticket.timestamps.lastEvictionAt = now;
     ticket.dispatchTelemetry.retryCount++;
     const retries = ticket.dispatchTelemetry.retryCount;
@@ -600,11 +737,14 @@ export class TicketEngine {
       toState: 'REQUEUED',
       timestamp: now,
       actor: 'SYSTEM_LEASE_EVICTOR',
-      reason,
+      reason: sanitizedReason,
+      fencingToken: ticket.dispatchTelemetry.fencingToken,
       metadata: {
         abandonedByWorker: workerId,
         retryCount: retries,
         maxRetries,
+        sanitizedReason,
+        fencingToken: ticket.dispatchTelemetry.fencingToken,
       },
     });
 
@@ -619,7 +759,12 @@ export class TicketEngine {
         toState: 'DEAD_LETTER',
         timestamp: now,
         actor: 'SYSTEM_DLQ_ROUTER',
-        reason: `Exceeded max retries after lease eviction (${retries}/${maxRetries})`,
+        reason: `Exceeded max retries after lease eviction (${retries}/${maxRetries}). Reason: ${sanitizedReason}`,
+        fencingToken: ticket.dispatchTelemetry.fencingToken,
+        metadata: {
+          fatalReason: sanitizedReason,
+          fencingToken: ticket.dispatchTelemetry.fencingToken,
+        },
       });
       this.deadLetterTickets.set(ticket.id, ticket);
     } else {

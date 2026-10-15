@@ -11,20 +11,29 @@ interface DLQInspectorProps {
   dlqTickets: Ticket[];
   onReplayTicket: (ticketId: string, resetRetries: boolean) => void;
   onSelectTicket: (ticket: Ticket) => void;
+  onInjectSensitiveDLQ?: () => void;
 }
 
 export const DLQInspector: React.FC<DLQInspectorProps> = ({
   dlqTickets,
   onReplayTicket,
+  onInjectSensitiveDLQ,
 }) => {
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(
     dlqTickets.length > 0 ? dlqTickets[0] : null
   );
 
+  // Sync selectedTicket if dlqTickets changes
+  React.useEffect(() => {
+    if (dlqTickets.length > 0 && (!selectedTicket || !dlqTickets.some((t) => t.id === selectedTicket.id))) {
+      setSelectedTicket(dlqTickets[0]);
+    }
+  }, [dlqTickets, selectedTicket]);
+
   return (
     <div className="space-y-6">
       {/* Banner Explicativo */}
-      <div className="bg-rose-950/20 border border-rose-800/40 rounded-xl p-5">
+      <div className="bg-rose-950/20 border border-rose-800/40 rounded-xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-start gap-3">
           <div className="p-2.5 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20">
             <ShieldAlert className="w-6 h-6" />
@@ -35,10 +44,21 @@ export const DLQInspector: React.FC<DLQInspectorProps> = ({
             </h2>
             <p className="text-xs text-rose-200/70 mt-1 max-w-3xl">
               Los tickets son derivados aquí una vez que los reintentos alcanzan o superan el umbral límite (<code>max_retries</code>).
-              Los incidentes quedan en aislamiento preventivo para proteger a los consumidores de fallos en cascada, preservando la traza cronológica completa e inmutable para análisis de causa raíz y reincorporación manual por operadores.
+              Los incidentes quedan en aislamiento preventivo para proteger a los consumidores de fallos en cascada. El sanitizador forense redacta credenciales (JWT, Postgres URI, API Keys) antes de persistir los registros.
             </p>
           </div>
         </div>
+
+        {onInjectSensitiveDLQ && (
+          <button
+            onClick={onInjectSensitiveDLQ}
+            className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-500 text-white transition-all shadow-md shadow-rose-950/50 shrink-0 font-mono"
+            title="Inyecta un incidente crítico con credenciales JWT y Postgres para observar la redacción forense en vivo"
+          >
+            <ShieldAlert className="w-4 h-4" />
+            <span>Inyectar Ticket con Secreto JWT/DB a DLQ</span>
+          </button>
+        )}
       </div>
 
       {/* Cuadrícula Principal */}

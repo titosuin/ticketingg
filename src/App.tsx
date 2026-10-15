@@ -5,8 +5,17 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { TicketEngine } from './engine/ticketEngine.ts';
-import type { Ticket, TicketState, QueueMetrics, EnqueueTicketInput, RequeueStrategy } from './engine/types.ts';
-import { INITIAL_SEED_TICKETS } from './engine/demoData.ts';
+import type {
+  Ticket,
+  TicketState,
+  QueueMetrics,
+  EnqueueTicketInput,
+  RequeueStrategy,
+  UserAccount,
+} from './engine/types.ts';
+import { defaultAuthManager, SecurityViolationError, AuthManager } from './engine/security.ts';
+import { appDatabase } from './engine/database.ts';
+import { LoginScreen } from './components/LoginScreen.tsx';
 import { Header } from './components/Header.tsx';
 import { MetricsBar } from './components/MetricsBar.tsx';
 import { FSMVisualizer } from './components/FSMVisualizer.tsx';
@@ -17,6 +26,7 @@ import { ConcurrencyRunner } from './components/ConcurrencyRunner.tsx';
 import { ArchitectureDocs } from './components/ArchitectureDocs.tsx';
 import { EnqueueModal } from './components/EnqueueModal.tsx';
 import { TicketDetailModal } from './components/TicketDetailModal.tsx';
+import { UserManagementModal } from './components/UserManagementModal.tsx';
 
 const INITIAL_WORKERS: WorkerStatus[] = [
   { id: 'worker-alpha', name: 'Trabajador Alfa', assignedTicket: null, state: 'IDLE', resolvedCount: 0, requeuedCount: 0, evictedCount: 0, leaseRemainingMs: 0, leaseTotalMs: 5000 },
@@ -28,8 +38,16 @@ const INITIAL_WORKERS: WorkerStatus[] = [
 
 export default function App() {
   const engineRef = useRef<TicketEngine>(new TicketEngine({ defaultLeaseTtlMs: 6000, defaultMaxRetries: 3 }));
+  const authManagerRef = useRef<AuthManager>(defaultAuthManager);
+
+  // Sesión Activa RBAC (Autenticación Persistente)
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(() => appDatabase.getSavedSession());
+  const [isUserModalOpen, setIsUserModalOpen] = useState(false);
+  const [idorAlert, setIdorAlert] = useState<{ message: string; code: string; targetId: string } | null>(null);
+
   const [activeTab, setActiveTab] = useState<'main' | 'dlq' | 'concurrency' | 'architecture'>('main');
-  const [isSimRunning, setIsSimRunning] = useState<boolean>(true);
+  // Auto-resolución desactivada por directiva: los tickets permanecen en cola hasta que un operador los tome
+  const [isSimRunning, setIsSimRunning] = useState<boolean>(false);
   const [simSpeed, setSimSpeed] = useState<number>(1);
   const [selectedStateFilter, setSelectedStateFilter] = useState<TicketState | null>(null);
 
@@ -41,39 +59,60 @@ export default function App() {
   const [isEnqueueOpen, setIsEnqueueOpen] = useState(false);
   const [inspectTicket, setInspectTicket] = useState<Ticket | null>(null);
 
-  // Sincronización del estado del motor
+  // Redirigir a 'main' si el usuario cambia a 'requester' y estaba en pestaña admin
+  useEffect(() => {
+    if (currentUser?.role === 'requester' && activeTab !== 'main') {
+      setActiveTab('main');
+    }
+  }, [currentUser, activeTab]);
+
+  // Sincronización del estado del motor y base de datos
   const refreshEngineState = useCallback(() => {
     const engine = engineRef.current;
     const m = engine.get_metrics();
     setMetrics(m);
-    setAllTickets(engine.get_all_tickets());
+    const tickets = engine.get_all_tickets();
+    setAllTickets(tickets);
+    appDatabase.saveTicketsBatch(tickets);
   }, []);
 
-  // Inicializar tickets de muestra
+  // Cargar tickets persistentes desde la Base de Datos al inicializar
   useEffect(() => {
     const init = async () => {
-      const engine = engineRef.current;
-      for (const item of INITIAL_SEED_TICKETS) {
-        await engine.enqueue(item);
+      const savedTickets = appDatabase.getAllTickets();
+      if (savedTickets.length > 0) {
+        // Restaurar tickets en el motor
+        for (const t of savedTickets) {
+          await engineRef.current.enqueue({
+            title: t.payload.title,
+            description: t.payload.description,
+            tags: t.payload.tags,
+            severity: t.severity,
+            author: t.author,
+            slaMinutes: t.payload.slaMinutes,
+            maxRetries: t.dispatchTelemetry.maxRetries,
+            context: t.payload.context,
+          });
+        }
       }
       refreshEngineState();
     };
     init();
   }, [refreshEngineState]);
 
-  // Bucle de latido: actualiza temporizadores de lease y expulsa vencidos
+  // Bucle de latido: actualiza temporizadores de lease y expulsa vencidos si el worker expira
   useEffect(() => {
     const timer = setInterval(async () => {
       const engine = engineRef.current;
       const now = Date.now();
 
-      // Expulsar leases vencidos automáticamente
+      // Expulsar leases vencidos automáticamente si el lease llega a 0
       const evicted = await engine.evict_expired_leases(now);
       if (evicted > 0) {
         refreshEngineState();
       }
 
-      // Actualizar contadores de trabajadores
+      // Actualizar contadores de trabajadores en procesamiento manual
       setWorkers((prevWorkers) =>
         prevWorkers.map((w) => {
           if (w.assignedTicket) {
@@ -105,139 +144,22 @@ export default function App() {
     return () => clearInterval(timer);
   }, [refreshEngineState]);
 
-  // Ciclo autónomo de simulación de 5 trabajadores
-  useEffect(() => {
-    if (!isSimRunning) return;
-
-    const intervalMs = Math.max(200, Math.floor(1200 / simSpeed));
-    const simInterval = setInterval(async () => {
-      const engine = engineRef.current;
-      const now = Date.now();
-
-      setWorkers((prevWorkers) => {
-        const nextWorkers = [...prevWorkers];
-
-        const idleIndices = nextWorkers
-          .map((w, idx) => (w.state === 'IDLE' ? idx : -1))
-          .filter((idx) => idx !== -1);
-
-        const busyIndices = nextWorkers
-          .map((w, idx) => (w.state === 'PROCESSING' && w.assignedTicket ? idx : -1))
-          .filter((idx) => idx !== -1);
-
-        // 1. Si hay un trabajador inactivo, intentar adquirir el siguiente ticket
-        if (idleIndices.length > 0 && Math.random() < 0.85) {
-          const targetIdx = idleIndices[Math.floor(Math.random() * idleIndices.length)];
-          const worker = nextWorkers[targetIdx];
-
-          engine.acquire_next(worker.id, 6000, now).then((ticket) => {
-            if (ticket) {
-              setWorkers((current) =>
-                current.map((cw) =>
-                  cw.id === worker.id
-                    ? {
-                        ...cw,
-                        assignedTicket: ticket,
-                        state: 'PROCESSING',
-                        leaseRemainingMs: 6000,
-                        leaseTotalMs: 6000,
-                      }
-                    : cw
-                )
-              );
-              refreshEngineState();
-            }
-          });
-        }
-
-        // 2. Si hay trabajadores ocupados, avanzar uno hacia resolución o reintento
-        if (busyIndices.length > 0 && Math.random() < 0.65) {
-          const busyIdx = busyIndices[Math.floor(Math.random() * busyIndices.length)];
-          const worker = nextWorkers[busyIdx];
-          const ticket = worker.assignedTicket!;
-
-          const roll = Math.random();
-          if (roll < 0.75) {
-            // Confirmar resolución
-            engine
-              .commit_resolution(
-                ticket.id,
-                worker.id,
-                `Resolución confirmada y auditada automáticamente por ${worker.name}`,
-                { resueltoEn: now, duracionMs: now - ticket.timestamps.createdAt },
-                now
-              )
-              .then(() => {
-                setWorkers((current) =>
-                  current.map((cw) =>
-                    cw.id === worker.id
-                      ? {
-                          ...cw,
-                          assignedTicket: null,
-                          state: 'IDLE',
-                          resolvedCount: cw.resolvedCount + 1,
-                          leaseRemainingMs: 0,
-                        }
-                      : cw
-                  )
-                );
-                refreshEngineState();
-              })
-              .catch(() => {});
-          } else if (roll < 0.93) {
-            // Reencolado por fallo transitorio
-            const strategy: RequeueStrategy = Math.random() < 0.5 ? 'HEAD' : 'EXPONENTIAL_BACKOFF';
-            engine
-              .requeue(
-                ticket.id,
-                `Timeout transitorio de microservicio detectado en ${worker.name}`,
-                strategy,
-                now
-              )
-              .then(() => {
-                setWorkers((current) =>
-                  current.map((cw) =>
-                    cw.id === worker.id
-                      ? {
-                          ...cw,
-                          assignedTicket: null,
-                          state: 'IDLE',
-                          requeuedCount: cw.requeuedCount + 1,
-                          leaseRemainingMs: 0,
-                        }
-                      : cw
-                  )
-                );
-                refreshEngineState();
-              })
-              .catch(() => {});
-          } else {
-            // Heartbeat para extender lease
-            engine.heartbeat_lease(ticket.id, worker.id, 4000, now).catch(() => {});
-          }
-        }
-
-        return nextWorkers;
-      });
-    }, intervalMs);
-
-    return () => clearInterval(simInterval);
-  }, [isSimRunning, simSpeed, refreshEngineState]);
-
   // Manejadores para acciones del operador
   const handleEnqueue = async (input: EnqueueTicketInput) => {
-    await engineRef.current.enqueue(input);
+    const newTicket = await engineRef.current.enqueue(input);
+    appDatabase.saveTicket(newTicket);
     refreshEngineState();
   };
 
   const handleBurstEnqueue = async () => {
+    if (!currentUser || currentUser.role === 'requester') return;
     const engine = engineRef.current;
     const channels = ['API', 'WEBHOOK', 'MONITORING', 'SLACK', 'PORTAL'] as const;
     const departments = ['Ingeniería de Plataforma', 'Plataforma de Datos', 'Operaciones de Seguridad', 'Servicios de Pago', 'Infraestructura Core'];
 
     for (let i = 0; i < 5; i++) {
       const sev = ((i % 4) + 1) as 1 | 2 | 3 | 4;
-      await engine.enqueue({
+      const t = await engine.enqueue({
         title: `Evento de Ráfaga de Ingesta #${Math.floor(Math.random() * 9000 + 1000)}`,
         description: `Paquete sintético de alta concurrencia verificando reequilibrio de heap y bloqueos atómicos sin condiciones de carrera.`,
         tags: ['rafaga', `nivel-${sev}`, 'carga-sintetica'],
@@ -251,22 +173,23 @@ export default function App() {
         maxRetries: 3,
         slaMinutes: sev === 4 ? 15 : sev === 3 ? 45 : 120,
       });
+      appDatabase.saveTicket(t);
     }
     refreshEngineState();
   };
 
   const handleReset = async () => {
+    if (!currentUser || currentUser.role === 'requester') return;
     engineRef.current = new TicketEngine({ defaultLeaseTtlMs: 6000, defaultMaxRetries: 3 });
     setWorkers(INITIAL_WORKERS);
-    for (const item of INITIAL_SEED_TICKETS) {
-      await engineRef.current.enqueue(item);
-    }
+    appDatabase.clearAllTickets();
     refreshEngineState();
   };
 
   const handleManualAcquire = async (workerId: string) => {
     const ticket = await engineRef.current.acquire_next(workerId, 6000);
     if (ticket) {
+      appDatabase.saveTicket(ticket);
       setWorkers((prev) =>
         prev.map((w) =>
           w.id === workerId
@@ -286,11 +209,12 @@ export default function App() {
 
   const handleCommitResolution = async (workerId: string, ticketId: string) => {
     try {
-      await engineRef.current.commit_resolution(
+      const ticket = await engineRef.current.commit_resolution(
         ticketId,
         workerId,
-        `Resolución manual confirmada por el operador vía ${workerId}`
+        `Resolución confirmada manualmente por el operador vía ${workerId}`
       );
+      appDatabase.saveTicket(ticket);
       setWorkers((prev) =>
         prev.map((w) =>
           w.id === workerId
@@ -312,11 +236,12 @@ export default function App() {
 
   const handleRequeue = async (workerId: string, ticketId: string, strategy: RequeueStrategy) => {
     try {
-      await engineRef.current.requeue(
+      const ticket = await engineRef.current.requeue(
         ticketId,
         `Reencolado manual por operador con estrategia: ${strategy}`,
         strategy
       );
+      appDatabase.saveTicket(ticket);
       setWorkers((prev) =>
         prev.map((w) =>
           w.id === workerId
@@ -370,13 +295,117 @@ export default function App() {
   };
 
   const handleReplayDLQ = async (ticketId: string, resetRetries: boolean) => {
-    await engineRef.current.replay_dlq_ticket(ticketId, resetRetries);
+    const ticket = await engineRef.current.replay_dlq_ticket(ticketId, resetRetries);
+    if (ticket) appDatabase.saveTicket(ticket);
     refreshEngineState();
   };
 
+  const handleLogout = () => {
+    appDatabase.clearSession();
+    setCurrentUser(null);
+  };
+
+  // Manejador para simulación de ataque IDOR
+  const handleSimulateIdor = () => {
+    if (!currentUser) return;
+    const all = engineRef.current.get_all_tickets();
+    const foreignTicket = all.find((t) => t.author.id !== currentUser.id) || all[0];
+    const targetId = foreignTicket ? foreignTicket.id : '018bcfe5-6800-7000-81ec-dfe5dca0ed87';
+
+    try {
+      engineRef.current.get_ticket_secure(targetId, currentUser);
+      setIdorAlert({
+        code: 'INSECURE_ACCESS_PERMITTED',
+        message: `Acceso no denegado para el ticket ${targetId}`,
+        targetId,
+      });
+    } catch (err: unknown) {
+      if (err instanceof SecurityViolationError) {
+        setIdorAlert({
+          code: err.code,
+          message: err.message,
+          targetId,
+        });
+      } else if (err instanceof Error) {
+        setIdorAlert({
+          code: 'BOLA_ACCESS_DENIED',
+          message: err.message,
+          targetId,
+        });
+      }
+    }
+  };
+
+  // Manejador para inyección forense a DLQ con secretos reales
+  const handleInjectSensitiveDLQ = async () => {
+    if (!currentUser) return;
+    const engine = engineRef.current;
+    const now = Date.now();
+
+    const injected = await engine.enqueue({
+      title: 'Fuga de Credenciales Forense en Microservicio de Pagos',
+      description:
+        'Error crítico en pasarela: timeout conectando a postgres://app_user:s3cr3tP@ss!@pg-cluster.internal:5432/finance_db con JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkFkbWluIERldiJ9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c',
+      tags: ['seguridad', 'jwt', 'postgres', 'dlq-forensic-test'],
+      severity: 4,
+      author: {
+        id: currentUser.id,
+        name: currentUser.name,
+        department: currentUser.department,
+        channel: 'API',
+      },
+      maxRetries: 2,
+      context: {
+        connectionString: 'postgres://operator_admin:MasterKeySecret2026@10.0.0.1:5432/ledger',
+        apiSecretKey: 'mock_api_key_998877665544332211aabbcc',
+        bearerToken: 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyIjoiYWRtaW4ifQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
+        privatePassword: 'plain_text_dev_password_do_not_share',
+      },
+    });
+
+    await engine.acquire_next('worker-sec-tester', 3000, now + 10);
+    await engine.requeue(
+      injected.id,
+      'Fallo transitorio conectando a redis://cache.internal:6379/0 con JWT eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYWRtaW4ifQ.dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk',
+      'HEAD',
+      now + 20
+    );
+
+    await engine.acquire_next('worker-sec-tester', 3000, now + 30);
+    const dlqT = await engine.requeue(
+      injected.id,
+      'Fallo irrecuperable en postgres://admin_root:SuperSecretP@ssword@database.prod:5432/vault con API Key mock_api_key_8833771199',
+      'HEAD',
+      now + 40
+    );
+
+    appDatabase.saveTicket(dlqT);
+    refreshEngineState();
+    setActiveTab('dlq');
+  };
+
+  // Si no hay sesión autenticada, mostrar pantalla de inicio de sesión seguro
+  if (!currentUser) {
+    return (
+      <LoginScreen
+        authManager={authManagerRef.current}
+        onLoginSuccess={(user) => {
+          setCurrentUser(user);
+          refreshEngineState();
+        }}
+      />
+    );
+  }
+
+  // Tickets visibles para el usuario actual según Row-Level Security
+  const visibleTickets =
+    currentUser.role === 'requester'
+      ? engineRef.current.get_tickets_for_user(currentUser)
+      : allTickets;
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-indigo-500/30 selection:text-indigo-200">
-      {/* Encabezado Global */}
+      {/* Encabezado Global con Switcher RBAC y Logout */}
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -389,6 +418,9 @@ export default function App() {
         onReset={handleReset}
         dlqCount={metrics.deadLetterCount}
         totalQueued={metrics.totalQueued}
+        currentUser={currentUser}
+        onOpenUserModal={() => setIsUserModalOpen(true)}
+        onLogout={handleLogout}
       />
 
       {/* Área de Contenido Principal */}
@@ -406,38 +438,46 @@ export default function App() {
               onFilterState={(st) => setSelectedStateFilter(st)}
             />
 
-            {/* Flota Distribuida de 5 Trabajadores */}
-            <WorkerFleet
-              workers={workers}
-              onManualAcquire={handleManualAcquire}
-              onCommitResolution={handleCommitResolution}
-              onRequeue={handleRequeue}
-              onCrashWorker={handleCrashWorker}
-              onHeartbeat={handleHeartbeat}
-              onSelectTicket={(t) => setInspectTicket(t)}
-            />
+            {/* Flota Distribuida de 5 Trabajadores (Oculta para Solicitantes) */}
+            {currentUser.role !== 'requester' && (
+              <WorkerFleet
+                workers={workers}
+                onManualAcquire={handleManualAcquire}
+                onCommitResolution={handleCommitResolution}
+                onRequeue={handleRequeue}
+                onCrashWorker={handleCrashWorker}
+                onHeartbeat={handleHeartbeat}
+                onSelectTicket={(t) => setInspectTicket(t)}
+                currentUser={currentUser}
+              />
+            )}
 
             {/* Explorador de Cola de Prioridad y Repositorio */}
             <QueueExplorer
-              tickets={allTickets}
+              tickets={visibleTickets}
               selectedStateFilter={selectedStateFilter}
               onClearFilter={() => setSelectedStateFilter(null)}
               onSelectTicket={(t) => setInspectTicket(t)}
+              currentUser={currentUser}
+              onSimulateIdor={handleSimulateIdor}
+              idorAlert={idorAlert}
+              onDismissIdorAlert={() => setIdorAlert(null)}
             />
           </div>
         )}
 
-        {activeTab === 'dlq' && (
+        {activeTab === 'dlq' && currentUser.role !== 'requester' && (
           <DLQInspector
             dlqTickets={engineRef.current.get_dlq_tickets()}
             onReplayTicket={handleReplayDLQ}
             onSelectTicket={(t) => setInspectTicket(t)}
+            onInjectSensitiveDLQ={handleInjectSensitiveDLQ}
           />
         )}
 
-        {activeTab === 'concurrency' && <ConcurrencyRunner />}
+        {activeTab === 'concurrency' && currentUser.role !== 'requester' && <ConcurrencyRunner />}
 
-        {activeTab === 'architecture' && <ArchitectureDocs />}
+        {activeTab === 'architecture' && currentUser.role !== 'requester' && <ArchitectureDocs />}
       </main>
 
       {/* Modales */}
@@ -445,6 +485,7 @@ export default function App() {
         isOpen={isEnqueueOpen}
         onClose={() => setIsEnqueueOpen(false)}
         onEnqueue={handleEnqueue}
+        currentUser={currentUser}
       />
 
       <TicketDetailModal
@@ -452,9 +493,24 @@ export default function App() {
         onClose={() => setInspectTicket(null)}
       />
 
+      <UserManagementModal
+        isOpen={isUserModalOpen}
+        onClose={() => setIsUserModalOpen(false)}
+        authManager={authManagerRef.current}
+        currentUser={currentUser}
+        onSelectUser={(u) => {
+          setCurrentUser(u);
+          setIdorAlert(null);
+          appDatabase.saveSession(u);
+          refreshEngineState();
+        }}
+        onUsersUpdated={() => refreshEngineState()}
+      />
+
       {/* Pie de Página */}
-      <footer className="border-t border-slate-900 bg-slate-950 py-4 px-6 text-center text-xs text-slate-500 font-mono">
-        Motor de Flujo y Despacho de Tickets Empresarial &bull; Ingeniería de Sistemas Distribuidos &bull; Identificadores Monótonos UUIDv7
+      <footer className="border-t border-slate-900 bg-slate-950 py-4 px-6 text-center text-xs text-slate-500 font-mono flex flex-col sm:flex-row items-center justify-between gap-2">
+        <span>Motor de Flujo y Despacho de Tickets Empresarial &bull; Fencing Tokens RFC 9562</span>
+        <span className="text-emerald-400 font-bold">Base de Datos: SQLite / Persistent Storage Activa</span>
       </footer>
     </div>
   );

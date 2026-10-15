@@ -4,7 +4,7 @@
  */
 
 import React, { useState } from 'react';
-import type { Ticket, Severity, TicketState } from '../engine/types.ts';
+import type { Ticket, Severity, TicketState, UserAccount } from '../engine/types.ts';
 import {
   Search,
   Filter,
@@ -12,6 +12,9 @@ import {
   TrendingUp,
   Tag,
   ChevronRight,
+  ShieldAlert,
+  UserCheck,
+  Lock,
 } from 'lucide-react';
 
 interface QueueExplorerProps {
@@ -19,6 +22,10 @@ interface QueueExplorerProps {
   onSelectTicket: (ticket: Ticket) => void;
   selectedStateFilter: TicketState | null;
   onClearFilter: () => void;
+  currentUser?: UserAccount;
+  onSimulateIdor?: () => void;
+  idorAlert?: { message: string; code: string; targetId: string } | null;
+  onDismissIdorAlert?: () => void;
 }
 
 export const QueueExplorer: React.FC<QueueExplorerProps> = ({
@@ -26,9 +33,15 @@ export const QueueExplorer: React.FC<QueueExplorerProps> = ({
   onSelectTicket,
   selectedStateFilter,
   onClearFilter,
+  currentUser,
+  onSimulateIdor,
+  idorAlert,
+  onDismissIdorAlert,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [severityFilter, setSeverityFilter] = useState<Severity | 'ALL'>('ALL');
+
+  const isRequester = currentUser?.role === 'requester';
 
   const filtered = tickets.filter((t) => {
     if (selectedStateFilter && t.state !== selectedStateFilter) return false;
@@ -89,22 +102,80 @@ export const QueueExplorer: React.FC<QueueExplorerProps> = ({
 
   return (
     <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4">
+      {/* Alerta de Ataque IDOR / BOLA Interceptado */}
+      {idorAlert && (
+        <div className="mb-4 p-4 rounded-xl bg-rose-950/40 border border-rose-800 text-rose-200 text-xs flex items-start justify-between gap-3 animate-in fade-in duration-150">
+          <div className="flex items-start gap-3">
+            <div className="p-2 rounded-lg bg-rose-500/20 text-rose-400 border border-rose-500/30 shrink-0">
+              <ShieldAlert className="w-5 h-5" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="font-bold font-mono text-rose-300 text-sm">
+                  [403 BOLA_ACCESS_DENIED] ATAQUE IDOR INTERCEPTADO Y BLOQUEADO
+                </span>
+                <span className="px-2 py-0.5 rounded bg-rose-500/20 text-rose-300 text-[10px] font-mono border border-rose-500/30 font-bold">
+                  OWASP API #1 PREVENTED
+                </span>
+              </div>
+              <p className="mt-1 text-rose-200/90 font-mono text-[11px] leading-relaxed">
+                {idorAlert.message}
+              </p>
+              <p className="mt-1 text-slate-400 text-[11px] font-sans">
+                El motor aplicó <strong>Row-Level Security (RLS)</strong> estricta. El usuario <code>{currentUser?.username}</code> ({currentUser?.id}) no tiene permisos para inspeccionar el ticket de otro solicitante.
+              </p>
+            </div>
+          </div>
+          {onDismissIdorAlert && (
+            <button
+              onClick={onDismissIdorAlert}
+              className="text-rose-400 hover:text-rose-200 font-mono text-xs px-2 py-1 rounded bg-rose-950/60 border border-rose-800/80"
+            >
+              Cerrar &times;
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Barra de Título y Filtros */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
         <div>
-          <h2 className="text-sm font-bold font-mono text-slate-100 flex items-center gap-2">
-            <span>COLA DE PRIORIDAD Y REPOSITORIO DE CICLO DE VIDA</span>
-            <span className="text-xs font-mono font-normal text-slate-400">
-              ({filtered.length} visibles de {tickets.length} totales)
-            </span>
-          </h2>
-          <p className="text-xs text-slate-400">
-            Ordenado dinámicamente por Puntaje de Heap (Base + Envejecimiento / Aging + Urgencia SLA)
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-bold font-mono text-slate-100 flex items-center gap-2">
+              <span>{isRequester ? 'MIS TICKETS EN COLA (ROW-LEVEL SECURITY)' : 'COLA DE PRIORIDAD Y REPOSITORIO DE CICLO DE VIDA'}</span>
+              <span className="text-xs font-mono font-normal text-slate-400">
+                ({filtered.length} visibles de {tickets.length} totales)
+              </span>
+            </h2>
+
+            {isRequester && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <UserCheck className="w-3 h-3" />
+                RLS ACTIVA (@{currentUser?.username})
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-slate-400 mt-0.5">
+            {isRequester
+              ? 'Mostrando exclusivamente los tickets creados por tu cuenta. El contexto interno de infraestructura está protegido.'
+              : 'Ordenado dinámicamente por Puntaje de Heap (Base + Envejecimiento / Aging + Urgencia SLA)'}
           </p>
         </div>
 
-        {/* Filtros */}
+        {/* Acciones y Filtros */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Botón Simular Ataque IDOR (para Solicitante) */}
+          {isRequester && onSimulateIdor && (
+            <button
+              onClick={onSimulateIdor}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-500/40 transition-colors shadow-sm font-mono"
+              title="Intenta consultar un ticket perteneciente a otro usuario para comprobar la denegación 403 BOLA"
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-rose-400" />
+              <span>Simular Ataque IDOR</span>
+            </button>
+          )}
+
           {/* Campo de búsqueda */}
           <div className="relative">
             <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -113,7 +184,7 @@ export const QueueExplorer: React.FC<QueueExplorerProps> = ({
               placeholder="Buscar UUID, etiqueta, título..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-8 pr-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 w-48 sm:w-64"
+              className="pl-8 pr-3 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500 w-44 sm:w-56"
             />
           </div>
 
@@ -148,9 +219,18 @@ export const QueueExplorer: React.FC<QueueExplorerProps> = ({
 
       {/* Lista de Tickets */}
       {filtered.length === 0 ? (
-        <div className="border border-dashed border-slate-800 rounded-xl p-12 text-center">
-          <p className="text-sm text-slate-400 font-mono">No se encontraron tickets con los filtros actuales.</p>
-          <p className="text-xs text-slate-600 mt-1">Prueba restableciendo los filtros o encolando nuevos tickets.</p>
+        <div className="border border-dashed border-slate-800 rounded-xl p-12 text-center bg-slate-950/40">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 mx-auto flex items-center justify-center mb-3">
+            <Tag className="w-6 h-6" />
+          </div>
+          <h3 className="text-sm font-bold text-slate-200 font-mono">
+            {tickets.length === 0 ? 'COLA COMPLETAMENTE LIMPIA (0 TICKETS)' : 'NO HAY RESULTADOS CON LOS FILTROS ACTUALES'}
+          </h3>
+          <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+            {tickets.length === 0
+              ? 'El motor está en espera. Usa el botón superior para crear y encolar tus propios tickets personalizados con la sesión activa.'
+              : 'Prueba restableciendo los filtros de severidad o el término de búsqueda.'}
+          </p>
         </div>
       ) : (
         <div className="space-y-2.5">

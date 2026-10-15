@@ -4,29 +4,37 @@
  */
 
 import React, { useState } from 'react';
-import type { EnqueueTicketInput, Severity, IngestChannel } from '../engine/types.ts';
-import { X, PlusCircle, Sparkles } from 'lucide-react';
+import type { EnqueueTicketInput, Severity, IngestChannel, UserAccount } from '../engine/types.ts';
+import { X, PlusCircle, Sparkles, UserCheck } from 'lucide-react';
 
 interface EnqueueModalProps {
   isOpen: boolean;
   onClose: () => void;
   onEnqueue: (input: EnqueueTicketInput) => void;
+  currentUser: UserAccount;
 }
 
 export const EnqueueModal: React.FC<EnqueueModalProps> = ({
   isOpen,
   onClose,
   onEnqueue,
+  currentUser,
 }) => {
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [tagsInput, setTagsInput] = useState('producción, incidente, crítico');
   const [severity, setSeverity] = useState<Severity>(3);
-  const [authorName, setAuthorName] = useState('Ingeniero de Plataforma');
-  const [department, setDepartment] = useState('Infraestructura Core');
-  const [channel, setChannel] = useState<IngestChannel>('API');
+  const [authorName, setAuthorName] = useState(currentUser.name);
+  const [department, setDepartment] = useState(currentUser.department);
+  const [channel, setChannel] = useState<IngestChannel>('PORTAL');
   const [slaMinutes, setSlaMinutes] = useState(60);
   const [maxRetries, setMaxRetries] = useState(3);
+
+  // Sync author if currentUser changes
+  React.useEffect(() => {
+    setAuthorName(currentUser.name);
+    setDepartment(currentUser.department);
+  }, [currentUser]);
 
   if (!isOpen) return null;
 
@@ -39,15 +47,20 @@ export const EnqueueModal: React.FC<EnqueueModalProps> = ({
       .map((t) => t.trim())
       .filter((t) => t.length > 0);
 
+    // If requester, always bind strictly to currentUser identity
+    const authorId = currentUser.role === 'requester' ? currentUser.id : `usr_${Math.floor(Math.random() * 9000 + 1000)}`;
+    const finalAuthorName = currentUser.role === 'requester' ? currentUser.name : authorName.trim() || currentUser.name;
+    const finalDepartment = currentUser.role === 'requester' ? currentUser.department : department.trim() || currentUser.department;
+
     onEnqueue({
       title: title.trim(),
       description: description.trim(),
       tags,
       severity,
       author: {
-        id: `usr_${Math.floor(Math.random() * 9000 + 1000)}`,
-        name: authorName.trim() || 'Operador Anónimo',
-        department: department.trim() || 'Ingeniería',
+        id: authorId,
+        name: finalAuthorName,
+        department: finalDepartment,
         channel,
       },
       slaMinutes: Number(slaMinutes) || 60,
@@ -199,30 +212,47 @@ export const EnqueueModal: React.FC<EnqueueModalProps> = ({
           </div>
 
           {/* Autor y Departamento */}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-slate-400 font-bold mb-1">
-                NOMBRE DEL CREADOR / OPERADOR
-              </label>
-              <input
-                type="text"
-                value={authorName}
-                onChange={(e) => setAuthorName(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-indigo-500"
-              />
+          {currentUser.role === 'requester' ? (
+            <div className="p-3 rounded-xl bg-slate-950/80 border border-slate-800 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-mono text-slate-400">
+                  AUTOR REGISTRADO (VINCULADO A SESIÓN RBAC)
+                </span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  FIRMA AUTÉNTICA @{currentUser.username}
+                </span>
+              </div>
+              <div className="mt-1 flex items-center justify-between text-slate-200 font-mono">
+                <span className="font-bold">{currentUser.name} ({currentUser.id})</span>
+                <span className="text-slate-400">{currentUser.department}</span>
+              </div>
             </div>
-            <div>
-              <label className="block text-slate-400 font-bold mb-1">
-                DEPARTAMENTO
-              </label>
-              <input
-                type="text"
-                value={department}
-                onChange={(e) => setDepartment(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-indigo-500"
-              />
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-slate-400 font-bold mb-1">
+                  NOMBRE DEL CREADOR / OPERADOR
+                </label>
+                <input
+                  type="text"
+                  value={authorName}
+                  onChange={(e) => setAuthorName(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-400 font-bold mb-1">
+                  DEPARTAMENTO
+                </label>
+                <input
+                  type="text"
+                  value={department}
+                  onChange={(e) => setDepartment(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg bg-slate-950 border border-slate-800 text-slate-200 focus:outline-none focus:border-indigo-500"
+                />
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Etiquetas y SLA */}
           <div className="grid grid-cols-2 gap-3">

@@ -1,6 +1,1 @@
-{
-  "name": "Motor de Flujo y Despacho de Tickets Empresarial",
-  "description": "Motor de despacho de tickets de alta concurrencia y tolerante a fallos con bloqueos atómicos por lease, cola de prioridad con prevención de inanición, ciclo de vida FSM y auditoría forense DLQ.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
+{"name":"Motor de Flujo y Despacho de Tickets Empresarial","description":"Motor de despacho de tickets de alta concurrencia y tolerante a fallos con bloqueos atómicos por lease, cola de prioridad con prevención de inanición, ciclo de vida FSM y auditoría forense DLQ.","requestFramePermissions":[],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}

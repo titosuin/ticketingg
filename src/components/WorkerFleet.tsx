@@ -27,6 +27,7 @@ interface WorkerFleetProps {
   onCrashWorker: (workerId: string) => void;
   onHeartbeat: (workerId: string, ticketId: string) => void;
   onSelectTicket: (ticket: Ticket) => void;
+  currentUser?: { role: string };
 }
 
 export const WorkerFleet: React.FC<WorkerFleetProps> = ({
@@ -37,7 +38,11 @@ export const WorkerFleet: React.FC<WorkerFleetProps> = ({
   onCrashWorker,
   onHeartbeat,
   onSelectTicket,
+  currentUser,
 }) => {
+  if (currentUser?.role === 'requester') {
+    return null;
+  }
   const getSevBadge = (sev: Severity) => {
     switch (sev) {
       case 4:
@@ -131,8 +136,11 @@ export const WorkerFleet: React.FC<WorkerFleetProps> = ({
                   <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 mb-2.5">
                     <div className="flex items-center justify-between gap-1 mb-1">
                       {getSevBadge(w.assignedTicket.severity)}
-                      <span className="text-[10px] font-mono text-slate-400 truncate max-w-[100px]">
-                        {w.assignedTicket.id.slice(0, 13)}...
+                      <span
+                        className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-bold"
+                        title="Fencing Token monótono activo para evitar Split-Brain"
+                      >
+                        TOKEN #{w.assignedTicket.dispatchTelemetry.fencingToken}
                       </span>
                     </div>
 

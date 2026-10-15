@@ -18,6 +18,51 @@ export type IngestChannel = 'API' | 'WEBHOOK' | 'PORTAL' | 'SLACK' | 'EMAIL' | '
 
 export type RequeueStrategy = 'HEAD' | 'TAIL' | 'EXPONENTIAL_BACKOFF';
 
+export type UserRole = 'requester' | 'ticket_admin' | 'system_admin';
+
+export const MAX_SYSTEM_USERS_QUOTA = 15;
+
+export type PasswordSecurityLevel = 'VERY_WEAK' | 'WEAK' | 'MEDIUM' | 'STRONG' | 'ULTRA_SECURE';
+
+export interface PasswordStrengthReport {
+  score: number; // 0 to 100
+  level: PasswordSecurityLevel;
+  isValid: boolean;
+  checks: {
+    minLength: boolean; // >= 12
+    hasUpper: boolean; // [A-Z]
+    hasLower: boolean; // [a-z]
+    hasNumber: boolean; // [0-9]
+    hasSpecial: boolean; // [!@#$%^&*()_+-=[]{}|;:,.<>?~/]
+    noCommonWords: boolean;
+    noUsername: boolean;
+  };
+  feedback: string[];
+}
+
+export interface UserAccount {
+  id: string;
+  username: string;
+  name: string;
+  department: string;
+  role: UserRole;
+  createdAt: number;
+  passwordHash?: string;
+  passwordLevel?: PasswordSecurityLevel;
+  passwordEntropyScore?: number;
+  passwordUpdatedAt?: number;
+  isPreseeded?: boolean;
+}
+
+export interface RegisterUserInput {
+  username: string;
+  passwordPlain?: string;
+  name: string;
+  department: string;
+  requestedRole?: UserRole;
+  adminInviteToken?: string;
+}
+
 export interface AuditTransition {
   transitionId: string;
   fromState: TicketState | null;
@@ -25,6 +70,7 @@ export interface AuditTransition {
   timestamp: number;
   actor: string;
   reason: string;
+  fencingToken?: number;
   metadata?: Record<string, unknown>;
 }
 
@@ -57,6 +103,7 @@ export interface DispatchTelemetry {
   maxRetries: number;
   currentWorkerId: string | null;
   leaseTtlMs: number;
+  fencingToken: number;
   auditTrail: AuditTransition[];
 }
 
@@ -94,6 +141,7 @@ export interface QueueMetrics {
     remainingMs: number;
     expiresAt: number;
     severity: Severity;
+    fencingToken: number;
   }[];
 }
 
