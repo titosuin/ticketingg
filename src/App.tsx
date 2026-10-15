@@ -73,7 +73,7 @@ export default function App() {
             tags: t.payload.tags,
             severity: t.severity,
             author: t.author,
-            slaMinutes: t.payload.slaMinutes,
+            slaMinutes: Math.max(1, Math.round((t.slaDeadlineMs - t.timestamps.createdAt) / 60000)),
             maxRetries: t.dispatchTelemetry.maxRetries,
             context: t.payload.context,
           });
@@ -383,7 +383,7 @@ export default function App() {
                     Resueltos
                   </span>
                   <span className="text-xl sm:text-2xl font-bold text-white">
-                    {metrics.totalResolved}
+                    {metrics.completedCount}
                   </span>
                 </div>
               </div>
