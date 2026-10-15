@@ -152,36 +152,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     onLoginSuccess(user);
   };
 
-  // Acceso rápido con 1 solo clic
-  const handleQuickLogin = (roleType: 'requester' | 'ticket_admin' | 'system_admin') => {
-    setErrorMessage(null);
-    setSuccessMessage(null);
-
-    let targetUsername = '';
-    let targetPassword = '';
-
-    if (roleType === 'requester') {
-      targetUsername = 'lbenitez';
-      targetPassword = 'L!9#uC4$bN7@zT2^kW8*';
-    } else if (roleType === 'ticket_admin') {
-      targetUsername = 'vrios_admin';
-      targetPassword = 'R#5!bN8$yT1^jM9@eK3&';
-    } else {
-      targetUsername = 'msilva_admin';
-      targetPassword = 'K$9#vP2!mX8@zQ7&wL4*';
-    }
-
-    const user = authManager.getUserByUsername(targetUsername);
-    if (user) {
-      setUsername(targetUsername);
-      setPassword(targetPassword);
-      authManager.recordLoginSuccess(targetUsername);
-      appDatabase.recordLoginAttempt(targetUsername, true, 'Acceso rápido');
-      appDatabase.saveSession(user, true);
-      onLoginSuccess(user);
-    }
-  };
-
   // Generador de contraseña segura para registro
   const handleGeneratePassword = () => {
     const pwd = generateUltraSecurePassword(18);
@@ -375,41 +345,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
               <span>Iniciar Sesión</span>
               <ArrowRight className="w-4 h-4" />
             </button>
-
-            {/* SECCIÓN INFERIOR DISCRETA: ACCESO RÁPIDO DE PRUEBA (1 CLIC) */}
-            <div className="pt-6 mt-6 border-t border-slate-800/80">
-              <p className="text-xs font-semibold text-slate-400 mb-2.5 text-center">
-                Acceso rápido de prueba (1 clic)
-              </p>
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleQuickLogin('requester')}
-                  className="py-2 px-2 bg-slate-950/80 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-medium text-center transition-all cursor-pointer"
-                >
-                  <span className="block font-semibold text-cyan-400 text-[11px]">Solicitante</span>
-                  <span className="text-[10px] text-slate-400">Lucas B.</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleQuickLogin('ticket_admin')}
-                  className="py-2 px-2 bg-slate-950/80 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-medium text-center transition-all cursor-pointer"
-                >
-                  <span className="block font-semibold text-amber-400 text-[11px]">Soporte</span>
-                  <span className="text-[10px] text-slate-400">Valeria R.</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleQuickLogin('system_admin')}
-                  className="py-2 px-2 bg-slate-950/80 hover:bg-slate-800 border border-slate-800 hover:border-slate-700 text-slate-300 hover:text-white rounded-lg text-xs font-medium text-center transition-all cursor-pointer"
-                >
-                  <span className="block font-semibold text-rose-400 text-[11px]">Administrador</span>
-                  <span className="text-[10px] text-slate-400">Mateo S.</span>
-                </button>
-              </div>
-            </div>
           </form>
         )}
 
