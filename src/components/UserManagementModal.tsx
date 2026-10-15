@@ -84,23 +84,24 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     switch (role) {
       case 'system_admin':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30">
-            <ShieldAlert className="w-3 h-3 text-purple-400" />
-            SYSTEM ADMIN / DEV
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30">
+            <ShieldAlert className="w-3 h-3 text-rose-400" />
+            Administrador
           </span>
         );
       case 'ticket_admin':
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30">
             <ShieldCheck className="w-3 h-3 text-amber-400" />
-            ADMIN DE TICKETS
+            Agente de Soporte
           </span>
         );
       case 'requester':
+      default:
         return (
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
             <Code2 className="w-3 h-3 text-cyan-400" />
-            DESARROLLADOR (SOLO TICKETS)
+            Solicitante
           </span>
         );
     }

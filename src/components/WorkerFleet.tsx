@@ -5,7 +5,7 @@
 
 import React from 'react';
 import type { Ticket, Severity, RequeueStrategy } from '../engine/types.ts';
-import { Cpu, CheckCircle2, RotateCw, AlertOctagon, Heart, Zap, Clock } from 'lucide-react';
+import { Headphones, CheckCircle2, RotateCcw, Clock, UserCheck, AlertCircle } from 'lucide-react';
 
 export interface WorkerStatus {
   id: string;
@@ -24,7 +24,7 @@ interface WorkerFleetProps {
   onManualAcquire: (workerId: string) => void;
   onCommitResolution: (workerId: string, ticketId: string) => void;
   onRequeue: (workerId: string, ticketId: string, strategy: RequeueStrategy) => void;
-  onCrashWorker: (workerId: string) => void;
+  onCrashWorker?: (workerId: string) => void;
   onHeartbeat: (workerId: string, ticketId: string) => void;
   onSelectTicket: (ticket: Ticket) => void;
   currentUser?: { role: string };
@@ -35,7 +35,6 @@ export const WorkerFleet: React.FC<WorkerFleetProps> = ({
   onManualAcquire,
   onCommitResolution,
   onRequeue,
-  onCrashWorker,
   onHeartbeat,
   onSelectTicket,
   currentUser,
@@ -43,223 +42,173 @@ export const WorkerFleet: React.FC<WorkerFleetProps> = ({
   if (currentUser?.role === 'requester') {
     return null;
   }
-  const getSevBadge = (sev: Severity) => {
+
+  const getPriorityBadge = (sev: Severity) => {
     switch (sev) {
       case 4:
-        return <span className="px-1.5 py-0.5 rounded text-[10px] bg-rose-500/20 text-rose-300 font-mono font-bold">CRÍTICO 4</span>;
+        return <span className="px-2 py-0.5 rounded text-[11px] bg-rose-500/20 text-rose-300 font-semibold border border-rose-500/30">Urgente</span>;
       case 3:
-        return <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/20 text-amber-300 font-mono font-semibold">ALTO 3</span>;
+        return <span className="px-2 py-0.5 rounded text-[11px] bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/30">Alta</span>;
       case 2:
-        return <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/20 text-blue-300 font-mono">MEDIO 2</span>;
+        return <span className="px-2 py-0.5 rounded text-[11px] bg-blue-500/20 text-blue-300 font-semibold border border-blue-500/30">Media</span>;
       case 1:
-        return <span className="px-1.5 py-0.5 rounded text-[10px] bg-slate-500/20 text-slate-300 font-mono">BAJO 1</span>;
-    }
-  };
-
-  const getWorkerStateLabel = (state: WorkerStatus['state']) => {
-    switch (state) {
-      case 'IDLE':
-        return 'INACTIVO';
-      case 'PROCESSING':
-        return 'PROCESANDO';
-      case 'RESOLVING':
-        return 'RESOLVIENDO';
-      case 'CRASHED':
-        return 'CAÍDO';
+      default:
+        return <span className="px-2 py-0.5 rounded text-[11px] bg-slate-500/20 text-slate-300 font-semibold border border-slate-500/30">Baja</span>;
     }
   };
 
   return (
-    <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4 mb-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
-        <div className="flex items-center gap-2">
-          <Cpu className="w-4 h-4 text-cyan-400" />
-          <h2 className="text-xs font-mono font-bold text-slate-200 uppercase tracking-wider">
-            FLOTA DE TRABAJADORES DISTRIBUIDA (5 PROCESADORES CONCURRENTES)
-          </h2>
-          <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-950/60 text-cyan-300 border border-cyan-800/40">
-            K=5 AGENTES
-          </span>
+    <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-5 mb-6 shadow-xl">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4 pb-3 border-b border-slate-800/80">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-indigo-400">
+            <Headphones className="w-5 h-5" />
+          </div>
+          <div>
+            <h2 className="text-sm font-bold text-white tracking-tight">
+              Panel de Atención de Agentes
+            </h2>
+            <p className="text-xs text-slate-400">
+              Toma manual de tickets en cola y confirmación de soluciones
+            </p>
+          </div>
         </div>
-        <p className="text-[11px] text-slate-400 font-mono">
-          Despacho Atómico &bull; Protocolo Seguro de Lease con TTL &bull; Auto-Expulsión
-        </p>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-        {workers.map((w) => {
-          const isProcessing = w.assignedTicket !== null && w.state !== 'CRASHED';
-          const isCrashed = w.state === 'CRASHED';
-          const leasePct = w.leaseTotalMs > 0 ? Math.max(0, Math.min(100, (w.leaseRemainingMs / w.leaseTotalMs) * 100)) : 0;
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3.5">
+        {workers.map((w, index) => {
+          const isAttending = w.assignedTicket !== null && w.state !== 'CRASHED';
+          const isPaused = w.state === 'CRASHED';
+          const agentName = `Agente Soporte ${index + 1}`;
 
           return (
             <div
               key={w.id}
-              className={`rounded-xl border p-3 flex flex-col justify-between transition-all ${
-                isCrashed
-                  ? 'bg-rose-950/20 border-rose-800/60 ring-1 ring-rose-500/40'
-                  : isProcessing
-                  ? 'bg-cyan-950/20 border-cyan-800/60'
-                  : 'bg-slate-950/50 border-slate-800'
+              className={`rounded-xl border p-4 flex flex-col justify-between transition-all ${
+                isAttending
+                  ? 'bg-slate-950/80 border-indigo-500/40 shadow-lg shadow-indigo-500/5'
+                  : isPaused
+                  ? 'bg-slate-950/40 border-slate-800/60 opacity-60'
+                  : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
               }`}
             >
-              {/* Encabezado del Trabajador */}
+              {/* Información del Agente */}
               <div>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-1.5">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
                     <span
-                      className={`w-2 h-2 rounded-full ${
-                        isCrashed
-                          ? 'bg-rose-500 animate-ping'
-                          : isProcessing
-                          ? 'bg-cyan-400 animate-pulse'
+                      className={`w-2.5 h-2.5 rounded-full ${
+                        isAttending
+                          ? 'bg-emerald-400 animate-pulse'
+                          : isPaused
+                          ? 'bg-amber-400'
                           : 'bg-slate-500'
                       }`}
                     />
-                    <span className="text-xs font-mono font-bold text-slate-200">{w.name}</span>
+                    <span className="text-xs font-semibold text-slate-200">
+                      {agentName}
+                    </span>
                   </div>
                   <span
-                    className={`text-[10px] font-mono px-1.5 py-0.2 rounded font-semibold ${
-                      isCrashed
-                        ? 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
-                        : isProcessing
-                        ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
+                    className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                      isAttending
+                        ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                        : isPaused
+                        ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
                         : 'bg-slate-800 text-slate-400'
                     }`}
                   >
-                    {getWorkerStateLabel(w.state)}
+                    {isAttending ? 'En Atención' : isPaused ? 'En Pausa' : 'Disponible'}
                   </span>
                 </div>
 
-                {/* Ticket Asignado o Espacio Vacío */}
+                {/* Ticket en Atención */}
                 {w.assignedTicket ? (
-                  <div className="bg-slate-900/90 border border-slate-800 rounded-lg p-2.5 mb-2.5">
-                    <div className="flex items-center justify-between gap-1 mb-1">
-                      {getSevBadge(w.assignedTicket.severity)}
-                      <span
-                        className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-bold"
-                        title="Fencing Token monótono activo para evitar Split-Brain"
-                      >
-                        TOKEN #{w.assignedTicket.dispatchTelemetry.fencingToken}
+                  <div className="bg-slate-900 border border-slate-800 rounded-xl p-3 mb-3">
+                    <div className="flex items-center justify-between gap-1 mb-1.5">
+                      {getPriorityBadge(w.assignedTicket.severity)}
+                      <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-cyan-400" />
+                        {(w.leaseRemainingMs / 1000).toFixed(0)}s
                       </span>
                     </div>
 
                     <h4
                       onClick={() => onSelectTicket(w.assignedTicket!)}
-                      className="text-xs font-semibold text-slate-200 line-clamp-1 hover:text-indigo-300 cursor-pointer"
+                      className="text-xs font-medium text-slate-200 line-clamp-2 hover:text-indigo-300 cursor-pointer transition-colors"
                       title={w.assignedTicket.payload.title}
                     >
                       {w.assignedTicket.payload.title}
                     </h4>
 
-                    {/* Barra de Cuenta Regresiva de Lease */}
-                    <div className="mt-2">
-                      <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-0.5">
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-cyan-400" />
-                          Lease TTL:
-                        </span>
-                        <span className={w.leaseRemainingMs < 1500 ? 'text-rose-400 font-bold' : 'text-cyan-300'}>
-                          {(w.leaseRemainingMs / 1000).toFixed(1)}s
-                        </span>
-                      </div>
-                      <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                        <div
-                          style={{ width: `${leasePct}%` }}
-                          className={`h-full transition-all duration-200 ${
-                            leasePct < 25 ? 'bg-rose-500' : leasePct < 50 ? 'bg-amber-500' : 'bg-cyan-500'
-                          }`}
-                        />
-                      </div>
+                    <div className="mt-2 text-[10px] text-slate-400">
+                      De: <span className="text-slate-300">{w.assignedTicket.author.name}</span>
                     </div>
                   </div>
                 ) : (
-                  <div className="border border-dashed border-slate-800 rounded-lg p-3 text-center mb-2.5">
-                    <span className="text-[11px] text-slate-500 font-mono">Sin lease activo</span>
+                  <div className="border border-dashed border-slate-800/80 rounded-xl p-4 text-center mb-3">
+                    <span className="text-xs text-slate-500">Sin ticket asignado</span>
                   </div>
                 )}
               </div>
 
-              {/* Botones de Acción del Trabajador */}
-              <div className="space-y-1.5 pt-1">
-                {isProcessing && w.assignedTicket ? (
+              {/* Botones de Acción en Español */}
+              <div className="space-y-2 pt-1">
+                {isAttending && w.assignedTicket ? (
                   <>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {/* Confirmar Resolución */}
-                      <button
-                        onClick={() => onCommitResolution(w.id, w.assignedTicket!.id)}
-                        className="flex items-center justify-center gap-1 px-2 py-1 rounded bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-[11px] font-medium transition-colors"
-                        title="Confirmar resolución y liberar lease"
-                      >
-                        <CheckCircle2 className="w-3 h-3" />
-                        <span>Resolver</span>
-                      </button>
-
-                      {/* Extender Lease con Heartbeat */}
-                      <button
-                        onClick={() => onHeartbeat(w.id, w.assignedTicket!.id)}
-                        className="flex items-center justify-center gap-1 px-2 py-1 rounded bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/30 text-[11px] font-medium transition-colors"
-                        title="Emitir heartbeat para extender el lease 3 segundos"
-                      >
-                        <Heart className="w-3 h-3" />
-                        <span>Extender</span>
-                      </button>
-                    </div>
-
-                    {/* Estrategias de Retorno */}
-                    <div className="grid grid-cols-2 gap-1.5">
-                      <button
-                        onClick={() => onRequeue(w.id, w.assignedTicket!.id, 'HEAD')}
-                        className="flex items-center justify-center gap-1 px-1.5 py-1 rounded bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 text-[10px] font-mono transition-colors"
-                        title="Fallar y reencolar en HEAD (urgente LIFO)"
-                      >
-                        <RotateCw className="w-2.5 h-2.5" />
-                        <span>Req: HEAD</span>
-                      </button>
-
-                      <button
-                        onClick={() => onRequeue(w.id, w.assignedTicket!.id, 'EXPONENTIAL_BACKOFF')}
-                        className="flex items-center justify-center gap-1 px-1.5 py-1 rounded bg-amber-600/20 hover:bg-amber-600/30 text-amber-300 border border-amber-500/30 text-[10px] font-mono transition-colors"
-                        title="Fallar y reencolar con Backoff Exponencial"
-                      >
-                        <RotateCw className="w-2.5 h-2.5" />
-                        <span>Req: Backoff</span>
-                      </button>
-                    </div>
-
-                    {/* Simular Caída del Trabajador */}
                     <button
-                      onClick={() => onCrashWorker(w.id)}
-                      className="w-full flex items-center justify-center gap-1 px-2 py-1 rounded bg-rose-600/20 hover:bg-rose-600/30 text-rose-300 border border-rose-500/30 text-[10px] font-mono transition-colors"
-                      title="Simular caída súbita para comprobar la expulsión automática de lease"
+                      type="button"
+                      onClick={() => onCommitResolution(w.id, w.assignedTicket!.id)}
+                      className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition-all cursor-pointer"
                     >
-                      <AlertOctagon className="w-3 h-3 text-rose-400" />
-                      <span>Simular Caída (Probar Expulsión)</span>
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      <span>Resolver Ticket</span>
                     </button>
+
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => onRequeue(w.id, w.assignedTicket!.id, 'HEAD')}
+                        className="flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 text-[11px] font-medium transition-colors cursor-pointer"
+                        title="Devolver a la cola para otro agente"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Devolver</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => onHeartbeat(w.id, w.assignedTicket!.id)}
+                        className="flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-slate-700 text-[11px] font-medium transition-colors cursor-pointer"
+                        title="Extender tiempo de atención"
+                      >
+                        <Clock className="w-3 h-3" />
+                        <span>+ Tiempo</span>
+                      </button>
+                    </div>
                   </>
-                ) : isCrashed ? (
+                ) : isPaused ? (
                   <button
+                    type="button"
                     onClick={() => onManualAcquire(w.id)}
-                    className="w-full flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors"
+                    className="w-full py-2 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-all cursor-pointer"
                   >
-                    <span>Reiniciar Trabajador</span>
+                    Reactivar Agente
                   </button>
                 ) : (
                   <button
+                    type="button"
                     onClick={() => onManualAcquire(w.id)}
-                    className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 text-xs font-medium transition-colors"
-                    title="Adquirir atómicamente el ticket de mayor prioridad disponible"
+                    className="w-full flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-sm shadow-indigo-600/15 transition-all cursor-pointer"
                   >
-                    <Zap className="w-3 h-3 text-cyan-400" />
-                    <span>Adquirir Siguiente Ticket</span>
+                    <UserCheck className="w-3.5 h-3.5" />
+                    <span>Tomar Siguiente Ticket</span>
                   </button>
                 )}
 
-                {/* Estadísticas del Trabajador */}
-                <div className="flex justify-between text-[9px] font-mono text-slate-500 pt-1.5 border-t border-slate-800/80">
-                  <span className="text-emerald-400 font-semibold" title="Tickets resueltos y confirmados">✓ {w.resolvedCount}</span>
-                  <span className="text-amber-400" title="Tickets reencolados por fallas">↻ {w.requeuedCount}</span>
-                  <span className="text-rose-400" title="Tickets expulsados por expiración de lease">✕ {w.evictedCount}</span>
+                {/* Contador simple de resueltos */}
+                <div className="text-center text-[10px] text-slate-400 pt-1 border-t border-slate-800/80">
+                  Resueltos: <span className="font-semibold text-emerald-400">{w.resolvedCount}</span>
                 </div>
               </div>
             </div>

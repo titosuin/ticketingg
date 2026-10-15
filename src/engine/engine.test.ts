@@ -16,6 +16,8 @@ import {
   generateUltraSecurePassword,
   hashPasswordSecure,
   MAX_SYSTEM_USERS_QUOTA,
+  sanitizeInputText,
+  ADMIN_MASTER_CODE,
 } from './security.ts';
 
 const mockAuthor: TicketAuthor = {
@@ -770,4 +772,97 @@ test('DevSecOps: Validación de contraseñas seguras, generador ultra seguro y h
     }
   );
 });
+
+test('DevSecOps: Sanitización XSS, Fuerza Bruta en Login (60s Lockout) y Código Maestro ADMIN-2026', async () => {
+  // 1. Sanitización contra XSS en títulos y descripciones
+  const rawXssTitle = 'Alerta <script>alert("XSS")</script> en pasarela de pagos';
+  const cleanTitle = sanitizeInputText(rawXssTitle);
+  assert.equal(cleanTitle, 'Alerta  en pasarela de pagos');
+  assert.ok(!cleanTitle.includes('<script>'));
+
+  const rawXssEvent = '<img src="x" onerror="stealTokens()" /> Error en módulo';
+  const cleanEvent = sanitizeInputText(rawXssEvent);
+  assert.ok(!cleanEvent.includes('onerror'));
+
+  const rawJsUri = 'javascript:document.cookie';
+  const cleanUri = sanitizeInputText(rawJsUri);
+  assert.ok(!cleanUri.includes('javascript:'));
+  assert.ok(cleanUri.includes('[BLOCKED_URI]'));
+
+  // 2. Verificación de Sanitización XSS automática en TicketEngine.enqueue
+  const engine = new TicketEngine();
+  const ticketXss = await engine.enqueue({
+    title: '<script>evil()</script>Ticket de prueba',
+    description: '<a href="javascript:steal()">Detalles</a> <body onload="hack()">Contenido</body>',
+    tags: ['seguridad', 'xss'],
+    severity: 2,
+    author: mockAuthor,
+  });
+  assert.ok(!ticketXss.payload.title.includes('<script>'));
+  assert.ok(!ticketXss.payload.description.includes('javascript:'));
+  assert.ok(!ticketXss.payload.description.includes('onload='));
+
+  // 3. Protección contra Fuerza Bruta en Login (5 fallos consecutivos = 60s lockout)
+  const auth = new AuthManager();
+  const targetUser = 'lbenitez';
+
+  // Fallar 4 veces consecutivas -> Cuenta todavía no bloqueada
+  for (let i = 1; i <= 4; i++) {
+    const res = auth.recordLoginFailure(targetUser);
+    assert.equal(res.isLocked, false);
+    assert.ok(res.message?.includes('Te quedan'));
+  }
+
+  // 5to fallo consecutivo -> Cuenta bloqueada temporalmente por 60 segundos
+  const fifthFail = auth.recordLoginFailure(targetUser);
+  assert.equal(fifthFail.isLocked, true);
+  assert.equal(fifthFail.remainingSeconds, 60);
+  assert.ok(fifthFail.message?.includes('bloqueada temporalmente por 60 segundos'));
+
+  // getLockoutStatus debe reflejar el bloqueo activo
+  const statusLocked = auth.getLockoutStatus(targetUser);
+  assert.equal(statusLocked.isLocked, true);
+  assert.ok(statusLocked.remainingSeconds > 0 && statusLocked.remainingSeconds <= 60);
+
+  // Éxito en login debe reiniciar el contador de fallos
+  auth.recordLoginSuccess(targetUser);
+  const statusAfterSuccess = auth.getLockoutStatus(targetUser);
+  assert.equal(statusAfterSuccess.isLocked, false);
+
+  // 4. Registro público asigna 'requester' por defecto
+  const publicUser = auth.registerUser({
+    username: 'public_dev',
+    name: 'Desarrollador Público',
+    department: 'Frontend',
+  });
+  assert.equal(publicUser.role, 'requester', 'El registro público siempre debe asignar requester por defecto');
+
+  // 5. Intento de auto-escalamiento a ticket_admin sin código debe ser bloqueado (403)
+  assert.throws(
+    () => {
+      auth.registerUser({
+        username: 'unauth_admin',
+        name: 'Hacker Intent',
+        department: 'External',
+        requestedRole: 'ticket_admin',
+      });
+    },
+    (err: unknown) => {
+      assert.ok(err instanceof SecurityViolationError);
+      assert.equal(err.code, 'PRIVILEGE_ESCALATION_BLOCKED');
+      return true;
+    }
+  );
+
+  // 6. Registro con código maestro ADMIN-2026 asigna ticket_admin exitosamente
+  const authorizedSupport = auth.registerUser({
+    username: 'new_support_agent',
+    name: 'Nuevo Agente Soporte',
+    department: 'SRE Ops',
+    requestedRole: 'ticket_admin',
+    adminInviteToken: ADMIN_MASTER_CODE,
+  });
+  assert.equal(authorizedSupport.role, 'ticket_admin');
+});
+
 

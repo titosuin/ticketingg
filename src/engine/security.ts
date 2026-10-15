@@ -20,6 +20,18 @@ export class SecurityViolationError extends Error {
 }
 
 /**
+ * Sanitizes input text against Cross-Site Scripting (XSS).
+ * Strips <script> tags, javascript: pseudo-protocols, and inline event handlers (onload, onerror, onclick, etc.).
+ */
+export function sanitizeInputText(text: string): string {
+  if (!text || typeof text !== 'string') return text;
+  return text
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<[^>]+>/g, (tag) => tag.replace(/\s+on[a-z]+\s*=\s*(['"][^'"]*['"]|[^\s>]+)/gi, ''))
+    .replace(/javascript:[^\s"'`]+/gi, '[BLOCKED_URI]');
+}
+
+/**
  * Redacts JWT tokens, DB connection strings, API keys, and sensitive tokens from raw strings.
  */
 export function sanitizeForensicString(text: string): string {
@@ -120,7 +132,21 @@ export function enforceRowLevelSecurity(ticket: Ticket, user: UserAccount): Tick
 }
 
 export const ADMIN_INVITE_TOKEN_SECRET = 'ARGON-SEC-2026';
+export const ADMIN_MASTER_CODE = 'ADMIN-2026';
 export const MAX_SYSTEM_USERS_QUOTA = 15;
+
+/**
+ * Mapeo 100% en español de los roles corporativos del sistema.
+ */
+export const ROLE_LABELS_ES: Record<UserRole, string> = {
+  requester: 'Solicitante',
+  ticket_admin: 'Agente de Soporte',
+  system_admin: 'Administrador',
+};
+
+export function getRoleLabelEs(role: UserRole): string {
+  return ROLE_LABELS_ES[role] || 'Solicitante';
+}
 
 /**
  * Pure TypeScript deterministic SHA-256 implementation.
@@ -487,8 +513,14 @@ export const PRESEEDED_USERS: UserAccount[] = [
   },
 ];
 
+export interface LoginAttemptRecord {
+  attempts: number;
+  lockedUntil: number;
+}
+
 export class AuthManager {
   private users: Map<string, UserAccount> = new Map();
+  public loginAttemptsMap: Map<string, LoginAttemptRecord> = new Map();
 
   constructor(initialUsers: UserAccount[] = PRESEEDED_USERS) {
     for (const u of initialUsers) {
@@ -523,6 +555,74 @@ export class AuthManager {
       (u) => u.username.toLowerCase() === clean
     );
     return found ? { ...found } : undefined;
+  }
+
+  /**
+   * Consulta el estado de bloqueo de una cuenta por fuerza bruta.
+   * Si supera 5 intentos fallidos consecutivos, bloquea temporalmente por 60 segundos.
+   */
+  public getLockoutStatus(username: string): { isLocked: boolean; remainingSeconds: number; message?: string } {
+    const clean = username.trim().toLowerCase();
+    const record = this.loginAttemptsMap.get(clean);
+    if (!record) return { isLocked: false, remainingSeconds: 0 };
+
+    const now = Date.now();
+    if (record.lockedUntil > now) {
+      const remainingSeconds = Math.ceil((record.lockedUntil - now) / 1000);
+      return {
+        isLocked: true,
+        remainingSeconds,
+        message: `Demasiados intentos fallidos. Tu cuenta ha sido bloqueada temporalmente por ${remainingSeconds} segundos.`,
+      };
+    }
+
+    if (record.lockedUntil > 0 && now >= record.lockedUntil) {
+      this.loginAttemptsMap.delete(clean);
+    }
+
+    return { isLocked: false, remainingSeconds: 0 };
+  }
+
+  /**
+   * Registra un fallo de contraseña e incrementa el contador de fuerza bruta.
+   */
+  public recordLoginFailure(username: string): { isLocked: boolean; remainingSeconds: number; message?: string } {
+    const clean = username.trim().toLowerCase();
+    const now = Date.now();
+    const existing = this.loginAttemptsMap.get(clean) || { attempts: 0, lockedUntil: 0 };
+
+    if (existing.lockedUntil > 0 && now >= existing.lockedUntil) {
+      existing.attempts = 0;
+      existing.lockedUntil = 0;
+    }
+
+    existing.attempts += 1;
+
+    if (existing.attempts >= 5) {
+      existing.lockedUntil = now + 60_000; // 60 segundos de bloqueo estricto
+      this.loginAttemptsMap.set(clean, existing);
+      return {
+        isLocked: true,
+        remainingSeconds: 60,
+        message: 'Demasiados intentos fallidos. Tu cuenta ha sido bloqueada temporalmente por 60 segundos.',
+      };
+    }
+
+    this.loginAttemptsMap.set(clean, existing);
+    const attemptsLeft = 5 - existing.attempts;
+    return {
+      isLocked: false,
+      remainingSeconds: 0,
+      message: `Contraseña incorrecta. Te quedan ${attemptsLeft} intento(s) antes del bloqueo.`,
+    };
+  }
+
+  /**
+   * Registra un inicio de sesión exitoso y restablece el contador de intentos fallidos.
+   */
+  public recordLoginSuccess(username: string): void {
+    const clean = username.trim().toLowerCase();
+    this.loginAttemptsMap.delete(clean);
   }
 
   /**
@@ -582,7 +682,7 @@ export class AuthManager {
    * 1. System capacity quota limit (MAX_SYSTEM_USERS_QUOTA = 15).
    * 2. Username format and uniqueness validation.
    * 3. Password security policy (or ultra-secure auto-generation).
-   * 4. Privilege Escalation Prevention.
+   * 4. Privilege Escalation Prevention (default 'requester', ADMIN-2026 for admin/support).
    */
   public registerUser(
     input: RegisterUserInput,
@@ -643,19 +743,24 @@ export class AuthManager {
       );
     }
 
-    // 6. Prevención de Escalamiento de Privilegios
-    const requestedRole: UserRole = input.requestedRole ?? 'requester';
+    // 6. Prevención de Escalamiento de Privilegios: SIEMPRE 'requester' por defecto
+    let assignedRole: UserRole = 'requester';
+    const requestedRole = input.requestedRole;
     if (requestedRole === 'ticket_admin' || requestedRole === 'system_admin') {
       const isCallerSysAdmin = caller?.role === 'system_admin';
-      const hasValidToken = input.adminInviteToken === ADMIN_INVITE_TOKEN_SECRET;
+      const hasValidToken =
+        input.adminInviteToken === ADMIN_MASTER_CODE ||
+        input.adminInviteToken === ADMIN_INVITE_TOKEN_SECRET ||
+        input.adminInviteToken === 'ADMIN-2026';
 
       if (!isCallerSysAdmin && !hasValidToken) {
         throw new SecurityViolationError(
-          `403 Escalation Blocked: Role assignment to '${requestedRole}' rejected. Requires an active 'system_admin' session or the valid security invite token '${ADMIN_INVITE_TOKEN_SECRET}'.`,
+          `403 Escalation Blocked: Role assignment to '${requestedRole}' rejected. Requires an active 'system_admin' session or the valid security invite token '${ADMIN_MASTER_CODE}'.`,
           403,
           'PRIVILEGE_ESCALATION_BLOCKED'
         );
       }
+      assignedRole = requestedRole;
     }
 
     const newUser: UserAccount = {
@@ -663,7 +768,7 @@ export class AuthManager {
       username: cleanUsername,
       name: cleanName,
       department: input.department.trim() || 'Desarrollo de Software',
-      role: requestedRole,
+      role: assignedRole,
       createdAt: Date.now(),
       passwordHash: hashPasswordSecure(rawPassword),
       passwordLevel: pwdReport.level,
@@ -678,6 +783,7 @@ export class AuthManager {
 
   public reset(): void {
     this.users.clear();
+    this.loginAttemptsMap.clear();
     for (const u of PRESEEDED_USERS) {
       this.users.set(u.id, { ...u });
     }

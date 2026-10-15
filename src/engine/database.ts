@@ -207,7 +207,7 @@ export class DatabaseManager {
     const clean = username.trim().toLowerCase();
     const now = Date.now();
     const windowMs = 60_000;
-    const lockoutDurationMs = 30_000;
+    const lockoutDurationMs = 60_000;
 
     const recentAttempts = this.memoryLoginAudit.filter(
       (a) => a.username === clean && now - a.timestamp <= windowMs + lockoutDurationMs

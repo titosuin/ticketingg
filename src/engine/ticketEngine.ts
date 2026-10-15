@@ -20,6 +20,7 @@ import {
   sanitizeForensicString,
   sanitizeForensicMetadata,
   enforceRowLevelSecurity,
+  sanitizeInputText,
 } from './security.ts';
 
 export interface EngineConfig {
@@ -113,8 +114,8 @@ export class TicketEngine {
         state: 'QUEUED',
         author: input.author,
         payload: {
-          title: input.title,
-          description: input.description,
+          title: sanitizeInputText(input.title),
+          description: sanitizeInputText(input.description),
           tags: input.tags,
           context: sanitizedContext,
         },
