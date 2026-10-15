@@ -21,6 +21,7 @@ interface HeaderProps {
   currentUser: UserAccount;
   onOpenEnqueue: () => void;
   onOpenUserModal: () => void;
+  onOpenTour?: () => void;
   onLogout: () => void;
   dlqCount?: number;
   activeView?: 'main' | 'dlq';
@@ -31,6 +32,7 @@ export const Header: React.FC<HeaderProps> = ({
   currentUser,
   onOpenEnqueue,
   onOpenUserModal,
+  onOpenTour,
   onLogout,
   dlqCount = 0,
   activeView = 'main',
@@ -70,17 +72,22 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header className="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-30 px-4 sm:px-6 lg:px-8 py-3.5">
       <div className="max-w-7xl mx-auto flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 sm:gap-4">
-        {/* Título y Marca Limpios */}
+        {/* Título y Marca AegisFlow */}
         <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-gradient-to-tr from-indigo-600 to-cyan-600 text-white shadow-md shadow-indigo-600/20">
+          <div className="p-2.5 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-cyan-500 text-white shadow-md shadow-indigo-600/25">
             <LifeBuoy className="w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white tracking-tight">
-              Centro de Soporte y Tickets
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-lg font-bold text-white tracking-tight">
+                AegisFlow
+              </h1>
+              <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">
+                Enterprise
+              </span>
+            </div>
             <p className="text-xs text-slate-400">
-              Sistema de gestión y despacho de solicitudes
+              Sistema Inteligente de Gestión y Despacho
             </p>
           </div>
         </div>
@@ -109,6 +116,19 @@ export const Header: React.FC<HeaderProps> = ({
             <PlusCircle className="w-4 h-4" />
             <span>+ Nuevo Ticket</span>
           </button>
+
+          {/* Botón "Guía / Tour" */}
+          {onOpenTour && (
+            <button
+              type="button"
+              onClick={onOpenTour}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-slate-800/90 hover:bg-slate-700 text-slate-200 border border-slate-700 transition-all cursor-pointer"
+              title="Ver tour guiado interactivo de AegisFlow"
+            >
+              <LifeBuoy className="w-3.5 h-3.5 text-cyan-400" />
+              <span>Tour</span>
+            </button>
+          )}
 
           {/* Botón "Usuarios" (solo visible para Administrador) */}
           {isSysAdmin && (

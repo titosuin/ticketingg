@@ -197,11 +197,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-500 to-cyan-500 text-white shadow-lg shadow-indigo-500/25 mb-4">
             <ShieldCheck className="w-8 h-8" />
           </div>
-          <h1 className="text-2xl font-bold text-white tracking-tight">
-            Centro de Soporte y Tickets
-          </h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Gestión segura de incidentes y solicitudes
+          <div className="flex items-center justify-center gap-2 mb-1">
+            <h1 className="text-2xl font-bold text-white tracking-tight">
+              AegisFlow
+            </h1>
+            <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-semibold">
+              Enterprise
+            </span>
+          </div>
+          <p className="text-sm text-slate-400">
+            Plataforma Segura de Tickets y Despacho Inteligente
           </p>
         </div>
 

@@ -22,6 +22,7 @@ import { DLQInspector } from './components/DLQInspector.tsx';
 import { EnqueueModal } from './components/EnqueueModal.tsx';
 import { TicketDetailModal } from './components/TicketDetailModal.tsx';
 import { UserManagementModal } from './components/UserManagementModal.tsx';
+import { AppTour } from './components/AppTour.tsx';
 import { Inbox, Clock, CheckCircle2, AlertOctagon } from 'lucide-react';
 
 const INITIAL_WORKERS: WorkerStatus[] = [
@@ -45,9 +46,10 @@ export default function App() {
   const [allTickets, setAllTickets] = useState<Ticket[]>([]);
   const [workers, setWorkers] = useState<WorkerStatus[]>(INITIAL_WORKERS);
 
-  // Modales
+  // Modales y Tour Guiado
   const [isEnqueueOpen, setIsEnqueueOpen] = useState(false);
   const [inspectTicket, setInspectTicket] = useState<Ticket | null>(null);
+  const [isTourOpen, setIsTourOpen] = useState(() => !localStorage.getItem('aegisflow_tour_completed'));
 
   // Sincronización del estado del motor y persistencia
   const refreshEngineState = useCallback(() => {
@@ -273,6 +275,7 @@ export default function App() {
         currentUser={currentUser}
         onOpenEnqueue={() => setIsEnqueueOpen(true)}
         onOpenUserModal={() => setIsUserModalOpen(true)}
+        onOpenTour={() => setIsTourOpen(true)}
         onLogout={handleLogout}
         dlqCount={metrics.deadLetterCount}
         activeView={activeView}
@@ -458,9 +461,17 @@ export default function App() {
         onUsersUpdated={() => refreshEngineState()}
       />
 
+      {/* Tour Guiado Interactivo */}
+      <AppTour
+        isOpen={isTourOpen}
+        onClose={() => setIsTourOpen(false)}
+        userName={currentUser.name}
+        userRole={currentUser.role}
+      />
+
       {/* Pie de Página Limpio */}
       <footer className="border-t border-slate-900 bg-slate-950/80 py-4 px-6 text-center text-xs text-slate-400 flex flex-col sm:flex-row items-center justify-between gap-2">
-        <span>Centro de Soporte y Tickets &bull; Sistema Empresarial</span>
+        <span>AegisFlow Enterprise &bull; Sistema Inteligente de Despacho &amp; Tickets</span>
         <span className="text-slate-400">Conectado como <strong className="text-slate-200">{currentUser.name}</strong></span>
       </footer>
     </div>
